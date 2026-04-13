@@ -1,6 +1,13 @@
 """Tests for string normalization and parsing utilities."""
 
-from legal_music.utils import normalize_song, parse_artist_title, safe_filename, tokenize
+from legal_music.utils import (
+    normalize_song,
+    parse_artist_title,
+    safe_filename,
+    strip_accents,
+    strip_mix_suffix,
+    tokenize,
+)
 
 
 class TestNormalizeSong:
@@ -39,6 +46,12 @@ class TestNormalizeSong:
         assert "frank" in result
         assert "sinatra" in result
         assert "way" in result
+
+    def test_accent_folding(self):
+        assert strip_accents("Beyoncé") == "Beyonce"
+
+    def test_strip_mix_suffix_preserves_core_title(self):
+        assert strip_mix_suffix("My Way (Live 1997 Remaster)") == "My Way"
 
 
 class TestParseArtistTitle:

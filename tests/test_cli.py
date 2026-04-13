@@ -24,6 +24,11 @@ class TestCliParser:
         with pytest.raises(SystemExit):
             parser.parse_args(["dl"])
 
+    def test_maximize_flag(self):
+        parser = build_parser()
+        args = parser.parse_args(["dry", "--maximize", "playlist.txt"])
+        assert args.maximize is True
+
     def test_cmd_version(self, capsys):
         rc = main(["version"])
         assert rc == 0
@@ -48,8 +53,8 @@ class TestCliStats:
         # Create a minimal report.csv
         report = tmp_path / "report.csv"
         report.write_text(
-            "song,source,status,score,matched_query,candidate_title,page_url,direct_url,saved_file,note\n"
-            "Test Song,Bandcamp,page_found,0.650,test,Test Song,https://example.com,,, \n",
+            "song,source,status,score,matched_query,matched_query_kind,fallback_used,resolved_phase,result_tier,candidate_title,best_seen_source,best_seen_score,best_seen_tier,best_seen_url,page_url,direct_url,saved_file,note\n"
+            "Test Song,Bandcamp,page_found,0.650,test,title_only,no,phase_b,tier_2_strong_page,Test Song,,,,,https://example.com,,, \n",
             encoding="utf-8",
         )
         rc = main(["stats", str(tmp_path)])

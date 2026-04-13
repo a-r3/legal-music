@@ -3,44 +3,86 @@ from __future__ import annotations
 
 import re
 import sys
+import unicodedata
 from pathlib import Path
 
-from .constants import NOISE_WORDS, STOP_WORDS
+from .constants import MIX_NOISE_WORDS, NOISE_WORDS, STOP_WORDS
+
+_FEATURE_RE = re.compile(r"\b(feat\.?|featuring|ft\.?)\b", re.IGNORECASE)
+_PROD_RE = re.compile(r"\b(prod\.?|produced by)\b", re.IGNORECASE)
+_SEPARATOR_RE = re.compile(r"\s*(?:-|–|—|:|\||·|•|_)\s*")
+_BRACKETED_RE = re.compile(r"(\([^)]*\)|\[[^\]]*\]|\{[^}]*\})")
+
+
+def _simple_tokens(text: str) -> list[str]:
+    base = strip_accents(text).casefold()
+    base = re.sub(r"[^-\w\s]+", " ", base, flags=re.UNICODE)
+    return [token for token in re.split(r"[\s\-]+", base) if token]
+
+
+def strip_accents(text: str) -> str:
+    """Return a Unicode-normalized accent-folded version of text."""
+    normalized = unicodedata.normalize("NFKD", text)
+    return "".join(ch for ch in normalized if not unicodedata.combining(ch))
+
+
+def normalize_space(text: str) -> str:
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def strip_feature_suffix(text: str) -> str:
+    return normalize_space(_FEATURE_RE.split(text, maxsplit=1)[0])
+
+
+def strip_prod_suffix(text: str) -> str:
+    return normalize_space(_PROD_RE.split(text, maxsplit=1)[0])
+
+
+def strip_mix_suffix(text: str) -> str:
+    """Remove trailing version/mix noise while preserving the core title."""
+    cleaned = normalize_space(text)
+    for pattern in [
+        r"\s*[-–—]\s*(?:live|remaster(?:ed)?|remix|mix|version|edit|demo|acoustic)\b.*$",
+        r"\s*\((?:[^)]*?(?:live|remaster(?:ed)?|remix|mix|version|edit|demo|acoustic|mono|stereo).*)\)$",
+        r"\s*\[(?:[^\]]*?(?:live|remaster(?:ed)?|remix|mix|version|edit|demo|acoustic|mono|stereo).*)\]$",
+    ]:
+        cleaned = re.sub(pattern, "", cleaned, flags=re.IGNORECASE)
+    suffix_tokens = re.split(r"\s+", cleaned)
+    while suffix_tokens and suffix_tokens[-1].casefold().strip("._-") in MIX_NOISE_WORDS:
+        suffix_tokens.pop()
+    return normalize_space(" ".join(suffix_tokens))
+
+
+def strip_bracket_noise(text: str) -> str:
+    """Remove bracketed segments that mostly contain edition/noise words."""
+    def _repl(match: re.Match[str]) -> str:
+        segment = match.group(0)
+        tokens = _simple_tokens(segment)
+        if tokens and all(token in NOISE_WORDS or token in MIX_NOISE_WORDS for token in tokens):
+            return " "
+        lower = segment.casefold()
+        if any(word in lower for word in ("official", "lyrics", "remaster", "live", "video", "audio")):
+            return " "
+        return segment
+
+    return normalize_space(_BRACKETED_RE.sub(_repl, text))
 
 
 def normalize_song(name: str) -> str:
     """Normalize a song name for comparison."""
-    value = name.casefold().strip()
-    # Remove bracketed noise like (Official Audio), [Lyrics], etc.
-    value = re.sub(
-        r"\((?:[^)]*?(?:official|lyrics?|live|remix|remaster(?:ed)?|audio|video|"
-        r"hq|hd|karaoke|instrumental|feat\.?|featuring|ft\.?|prod\.?).*?)\)",
-        " ",
-        value,
-        flags=re.IGNORECASE,
-    )
-    value = re.sub(
-        r"\[(?:[^\]]*?(?:official|lyrics?|live|remix|remaster(?:ed)?|audio|video|"
-        r"hq|hd|karaoke|instrumental|feat\.?|featuring|ft\.?|prod\.?).*?)\]",
-        " ",
-        value,
-        flags=re.IGNORECASE,
-    )
-    # Normalize dashes
+    value = strip_accents(name).casefold().strip()
+    value = strip_bracket_noise(value)
     value = re.sub(r"[\u2013\u2014]", "-", value)
-    # Strip feat/prod suffixes
-    value = re.sub(r"\b(feat\.?|featuring|ft\.?)\b.*$", "", value)
-    value = re.sub(r"\b(prod\.?|produced by)\b.*$", "", value)
-    # Remove remaining brackets and punctuation
+    value = strip_feature_suffix(value)
+    value = strip_prod_suffix(value)
     value = re.sub(r"[()\[\]{}_]+", " ", value)
     value = re.sub(r"[^-\w\s]+", " ", value, flags=re.UNICODE)
-    # Remove noise words
     tokens = []
     for token in re.split(r"\s+", value):
         token = token.strip("-_ ")
         if token and token not in NOISE_WORDS:
             tokens.append(token)
-    return re.sub(r"\s+", " ", " ".join(tokens)).strip()
+    return normalize_space(" ".join(tokens))
 
 
 def tokenize(text: str) -> list[str]:
@@ -54,15 +96,26 @@ def tokenize(text: str) -> list[str]:
 
 def parse_artist_title(song: str) -> tuple[str, str]:
     """Split 'Artist - Title' into (artist, title). Returns ('', title) if no separator."""
-    raw = re.sub(r"\s+", " ", song).strip()
-    # Strip feat/prod first
-    raw = re.sub(r"\s+(feat\.?|featuring|ft\.?)\s+.*$", "", raw, flags=re.IGNORECASE)
-    raw = re.sub(r"\s+(prod\.?|produced by)\s+.*$", "", raw, flags=re.IGNORECASE)
-    for sep in [" - ", " — ", " – ", " _ "]:
-        if sep in raw:
-            left, right = raw.split(sep, 1)
-            return left.strip(), right.strip()
-    return "", raw.strip()
+    raw = normalize_space(song)
+    raw = strip_prod_suffix(raw)
+    raw = strip_bracket_noise(raw)
+
+    if " by " in raw.casefold():
+        title, artist = re.split(r"\s+by\s+", raw, maxsplit=1, flags=re.IGNORECASE)
+        return normalize_space(artist), normalize_space(title)
+
+    parts = [part.strip() for part in _SEPARATOR_RE.split(raw) if part.strip()]
+    if len(parts) >= 2:
+        left, right = parts[0], " - ".join(parts[1:])
+        left_norm = tokenize(left)
+        right_norm = tokenize(right)
+        if len(left_norm) <= 5 and len(right_norm) >= 1:
+            return (
+                normalize_space(strip_feature_suffix(left)),
+                normalize_space(strip_feature_suffix(right)),
+            )
+
+    return "", normalize_space(strip_feature_suffix(raw))
 
 
 def safe_filename(name: str, max_len: int = 180) -> str:

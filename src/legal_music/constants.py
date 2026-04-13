@@ -1,7 +1,7 @@
 """Project-wide constants."""
 from __future__ import annotations
 
-VERSION = "2.0.0"
+VERSION = "2.2.0"
 APP_NAME = "legal-music"
 APP_DIR = "legal-music"
 
@@ -43,6 +43,39 @@ NOISE_WORDS: frozenset[str] = frozenset(
         "teaser",
         "clean",
         "explicit",
+        "mono",
+        "stereo",
+        "session",
+        "sessions",
+        "bonus",
+        "deluxe",
+        "anniversary",
+        "recorded",
+    }
+)
+
+MIX_NOISE_WORDS: frozenset[str] = frozenset(
+    {
+        "live",
+        "remix",
+        "edit",
+        "version",
+        "remastered",
+        "remaster",
+        "mix",
+        "demo",
+        "radio",
+        "extended",
+        "mono",
+        "stereo",
+        "session",
+        "sessions",
+        "bonus",
+        "deluxe",
+        "anniversary",
+        "instrumental",
+        "karaoke",
+        "acoustic",
     }
 )
 
@@ -50,12 +83,21 @@ STOP_WORDS: frozenset[str] = frozenset(
     {"the", "a", "an", "and", "or", "of", "to", "for", "in", "on", "with", "by"}
 )
 
-REQUEST_TIMEOUT = 30
+REQUEST_TIMEOUT = 8
 DOWNLOAD_TIMEOUT = 120
-DEFAULT_DELAY = 1.2
-DEFAULT_MAX_RESULTS = 8
-DEFAULT_RETRY_COUNT = 2
-DEFAULT_BACKOFF = 2.0
+DEFAULT_DELAY = 0.3
+DEFAULT_MAX_RESULTS = 3
+DEFAULT_RETRY_COUNT = 0
+DEFAULT_BACKOFF = 1.0
+DEFAULT_PER_SONG_TIMEOUT = 10
+DEFAULT_QUERY_VARIANTS = 5
+FAST_QUERY_VARIANTS = 2
+MAXIMIZE_QUERY_VARIANTS = 8
+DEFAULT_EARLY_EXIT_SCORE = 0.95
+DEFAULT_FALLBACK_POLICY = "page_or_best_seen"
+DEFAULT_DEGRADED_AFTER_TIMEOUTS = 3
+DEFAULT_UNHEALTHY_AFTER_TIMEOUTS = 5
+DEFAULT_BLOCKED_AFTER_FAILURES = 2
 
 HEADERS: dict[str, str] = {
     "User-Agent": (

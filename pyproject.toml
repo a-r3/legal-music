@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools>=69", "wheel"]
+requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "legal-music"
-version = "2.0.0"
+version = "2.2.0"
 description = "CLI to find and download music from legal, permitted sources"
 readme = "README.md"
 license = {text = "MIT"}

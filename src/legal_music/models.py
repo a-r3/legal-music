@@ -16,6 +16,13 @@ class SongStatus(str, Enum):
     UNSUPPORTED = "unsupported"
 
 
+class ResultTier(str, Enum):
+    TIER_1_DOWNLOADABLE = "tier_1_downloadable"
+    TIER_2_STRONG_PAGE = "tier_2_strong_page"
+    TIER_3_WEAK_PAGE = "tier_3_weak_page"
+    TIER_4_LOW_CONFIDENCE = "tier_4_low_confidence"
+
+
 @dataclass
 class SearchResult:
     song: str
@@ -26,15 +33,46 @@ class SearchResult:
     note: str = ""
     score: float = 0.0
     matched_query: str = ""
+    matched_query_kind: str = ""
     candidate_title: str = ""
     saved_file: str = ""
+    fallback_used: bool = False
+    resolved_phase: str = ""
+    result_tier: ResultTier = ResultTier.TIER_4_LOW_CONFIDENCE
+    best_seen_source: str = ""
+    best_seen_score: float = 0.0
+    best_seen_url: str = ""
+    best_seen_tier: str = ""
 
     @classmethod
-    def not_found(cls, song: str) -> SearchResult:
+    def not_found(
+        cls,
+        song: str,
+        *,
+        best_seen: SearchResult | None = None,
+    ) -> SearchResult:
+        note = "No permitted source found."
+        best_seen_source = ""
+        best_seen_score = 0.0
+        best_seen_url = ""
+        best_seen_tier = ""
+        if best_seen is not None:
+            best_seen_source = best_seen.source
+            best_seen_score = best_seen.score
+            best_seen_url = best_seen.page_url
+            best_seen_tier = best_seen.result_tier.value
+            note = (
+                "No permitted source found above threshold. "
+                f"Best candidate: {best_seen.source} score={best_seen.score:.2f}"
+            )
         return cls(
             song=song,
             status=SongStatus.NOT_FOUND,
-            note="No permitted source found.",
+            note=note,
+            best_seen_source=best_seen_source,
+            best_seen_score=best_seen_score,
+            best_seen_url=best_seen_url,
+            best_seen_tier=best_seen_tier,
         )
 
     @classmethod
@@ -74,6 +112,11 @@ class RunStats:
     errors: int = 0
     duplicates: int = 0
     total: int = 0
+    elapsed_seconds: float = 0.0
+    avg_seconds_per_song: float = 0.0
+    avg_seconds_per_success: float = 0.0
+    phase_a_wins: int = 0
+    phase_b_wins: int = 0
 
     def record(self, result: SearchResult) -> None:
         status = result.status

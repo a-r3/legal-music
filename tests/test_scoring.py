@@ -39,3 +39,20 @@ class TestScoreCandidate:
             "https://archive.org/details/xyz-123-abc",
         )
         assert score_relevant > score_irrelevant
+
+    def test_mix_noise_does_not_sink_title_match(self):
+        score = score_candidate(
+            "Artist - My Song",
+            "Artist - My Song (Live Remaster)",
+            "https://example.com/artist-my-song-live-remaster",
+        )
+        assert score >= 0.5
+
+    def test_bandcamp_cover_penalty(self):
+        score = score_candidate(
+            "Artist - My Song",
+            "Other Artist - My Song Cover",
+            "https://artist.bandcamp.com/track/my-song-cover",
+            source_name="Bandcamp",
+        )
+        assert score < 0.75

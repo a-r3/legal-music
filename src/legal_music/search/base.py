@@ -46,12 +46,13 @@ class SourceAdapter(ABC):
         """Inspect a candidate URL and return a SearchResult."""
         ...
 
-    def fetch(self, url: str) -> requests.Response:
+    def fetch(self, url: str, timeout: int | None = None) -> requests.Response:
         """Fetch a URL with retry + backoff. Raises on final failure."""
+        use_timeout = timeout if timeout is not None else self.timeout
         last_exc: Exception | None = None
         for attempt in range(self.retry_count + 1):
             try:
-                r = self.session.get(url, timeout=self.timeout)
+                r = self.session.get(url, timeout=use_timeout)
                 r.raise_for_status()
                 return r
             except requests.HTTPError as e:
@@ -105,6 +106,6 @@ class SourceAdapter(ABC):
             direct_url=direct_url,
             status=status,
             note=note,
-            score=score_candidate(song, title, page_url),
+            score=score_candidate(song, title, page_url, source_name=self.name),
             candidate_title=title,
         )

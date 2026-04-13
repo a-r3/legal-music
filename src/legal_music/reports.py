@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import csv
+import json
 from datetime import datetime
 from pathlib import Path
 
@@ -21,7 +22,15 @@ REPORT_FIELDS = [
     "status",
     "score",
     "matched_query",
+    "matched_query_kind",
+    "fallback_used",
+    "resolved_phase",
+    "result_tier",
     "candidate_title",
+    "best_seen_source",
+    "best_seen_score",
+    "best_seen_tier",
+    "best_seen_url",
     "page_url",
     "direct_url",
     "saved_file",
@@ -36,7 +45,15 @@ def _result_to_row(r: SearchResult) -> dict[str, str]:
         "status": r.status.value if hasattr(r.status, "value") else str(r.status),
         "score": f"{r.score:.3f}",
         "matched_query": r.matched_query,
+        "matched_query_kind": r.matched_query_kind,
+        "fallback_used": "yes" if r.fallback_used else "no",
+        "resolved_phase": r.resolved_phase,
+        "result_tier": r.result_tier.value if hasattr(r.result_tier, "value") else str(r.result_tier),
         "candidate_title": r.candidate_title,
+        "best_seen_source": r.best_seen_source,
+        "best_seen_score": f"{r.best_seen_score:.3f}" if r.best_seen_score else "",
+        "best_seen_tier": r.best_seen_tier,
+        "best_seen_url": r.best_seen_url,
         "page_url": r.page_url,
         "direct_url": r.direct_url or "",
         "saved_file": r.saved_file,
@@ -113,26 +130,65 @@ def save_errors_log(errors: list[str], path: Path) -> None:
             f.write(f"[{stamp}] {e}\n")
 
 
+def save_summary_json(summary: dict[str, object], path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def format_elapsed(seconds: float) -> str:
+    total_seconds = max(0, int(round(seconds)))
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours:
+        return f"{hours}h {minutes:02d}m {secs:02d}s"
+    if minutes:
+        return f"{minutes}m {secs:02d}s"
+    return f"{secs}s"
+
+
 def print_summary(stats: RunStats, paths: dict[str, Path | None], use_color: bool = True) -> None:
     from .logging_utils import Printer
 
     p = Printer(color=use_color)
     p.separator()
     p.bold("SUMMARY")
-    p.info(f"total processed        : {stats.total}")
-    p.info(f"duplicates skipped     : {stats.duplicates}")
+
+    found = stats.downloaded + stats.page_found
+    found_pct = f"  ({found * 100 // max(stats.total, 1)}%)" if stats.total else ""
+
+    p.info(f"processed              : {stats.total}")
+    if stats.duplicates:
+        p.info(f"duplicates skipped     : {stats.duplicates}")
     if stats.downloaded:
-        p.ok(f"downloaded             : {stats.downloaded}")
+        p.ok(  f"downloaded             : {stats.downloaded}")
     if stats.page_found:
         p.warn(f"page found             : {stats.page_found}")
-    if stats.blocked:
-        p.warn(f"blocked (403/429)      : {stats.blocked}")
+    if found:
+        p.info(f"found (total)          : {found}{found_pct}")
     if stats.not_found:
         p.info(f"not found              : {stats.not_found}")
+    if stats.blocked:
+        p.warn(f"blocked (403/429)      : {stats.blocked}")
     if stats.download_error:
-        p.err(f"download errors        : {stats.download_error}")
+        p.err( f"download errors        : {stats.download_error}")
     if stats.errors:
-        p.err(f"errors                 : {stats.errors}")
+        p.err( f"errors                 : {stats.errors}")
+
+    if stats.elapsed_seconds:
+        p.info(f"elapsed                : {format_elapsed(stats.elapsed_seconds)}")
+    if stats.avg_seconds_per_song:
+        p.info(f"avg / song             : {stats.avg_seconds_per_song:.1f}s")
+    if stats.avg_seconds_per_success and found:
+        p.info(f"avg / result           : {stats.avg_seconds_per_success:.1f}s")
+
+    phase_parts = []
+    if stats.phase_a_wins:
+        phase_parts.append(f"A={stats.phase_a_wins}")
+    if stats.phase_b_wins:
+        phase_parts.append(f"B={stats.phase_b_wins}")
+    if phase_parts:
+        p.info(f"phase wins             : {', '.join(phase_parts)}")
+
     p.separator()
     for label, path in paths.items():
         if path and path.exists():

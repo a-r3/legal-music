@@ -1,39 +1,33 @@
 """Internet Archive source adapter (open API + page inspection)."""
 from __future__ import annotations
 
-from urllib.parse import quote, urljoin
+from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup
 
 from ...constants import AUDIO_EXTENSIONS
 from ...models import SearchResult, SongStatus
+from ..backends import InternetArchiveAPIBackend
 from ..base import SourceAdapter
 
-_IA_SEARCH = "https://archive.org/advancedsearch.php"
 _IA_DETAILS = "https://archive.org/details/"
 
 
 class InternetArchiveSource(SourceAdapter):
     name = "Internet Archive"
 
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.backend = InternetArchiveAPIBackend(self.session, self.delay)
+
     def search(self, song: str, variant: str) -> list[str]:
-        """Use the Archive.org API to find music items."""
-        params = (
-            f"q={quote(variant + ' mediatype:audio')}"
-            f"&fl[]=identifier&rows={self.max_results}"
-            f"&output=json&sort[]=downloads+desc"
-        )
-        try:
-            r = self.session.get(f"{_IA_SEARCH}?{params}", timeout=self.timeout)
-            r.raise_for_status()
-            docs = r.json().get("response", {}).get("docs", [])
-            return [f"{_IA_DETAILS}{doc['identifier']}" for doc in docs if "identifier" in doc]
-        except Exception:
-            return []
+        """Use the Archive.org native API to find music items."""
+        # Direct API search - no DuckDuckGo dependency
+        return self.backend.search(variant, self.max_results)
 
     def inspect(self, song: str, page_url: str) -> SearchResult:
         try:
-            r = self.fetch(page_url)
+            r = self.fetch(page_url, timeout=self.timeout)
             html = r.text
             soup = BeautifulSoup(html, "html.parser")
 
@@ -66,3 +60,4 @@ class InternetArchiveSource(SourceAdapter):
             if status_code in (403, 429):
                 return SearchResult.blocked(song, self.name, page_url)
             return SearchResult.error(song, self.name, f"Archive error: {e}")
+

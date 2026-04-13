@@ -1,18 +1,25 @@
 {
-  "delay": 1.2,
-  "max_results": 8,
-  "timeout": 30,
-  "retry_count": 2,
-  "backoff": 2.0,
-  "min_downloadable_score": 0.40,
-  "min_page_score": 0.52,
-  "min_best_seen_score": 0.55,
+  "_comment": "legal-music config — copy to ~/.config/legal-music/config.json and edit",
+
+  "delay": 0.25,
+  "max_results": 5,
+  "timeout": 10,
+  "per_song_timeout": 16,
+
+  "min_downloadable_score": 0.46,
+  "min_page_score": 0.48,
+
+  "cache_enabled": true,
+  "persistent_cache_enabled": false,
+
   "sources": [
-    {"name": "Internet Archive", "enabled": true},
-    {"name": "Bandcamp", "enabled": true},
-    {"name": "Jamendo", "enabled": true},
-    {"name": "Pixabay Music", "enabled": true}
+    {"name": "Internet Archive",   "enabled": true},
+    {"name": "Free Music Archive", "enabled": true},
+    {"name": "Bandcamp",           "enabled": true},
+    {"name": "Jamendo",            "enabled": false},
+    {"name": "Pixabay Music",      "enabled": false}
   ],
+
   "csv_report": true,
   "xlsx_report": true
 }

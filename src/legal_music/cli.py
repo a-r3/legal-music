@@ -6,7 +6,7 @@ import sys
 import time
 from pathlib import Path
 
-from .config import AppConfig
+from .config import ALL_SOURCE_NAMES, SOURCE_PRESETS, AppConfig
 from .constants import VERSION
 from .downloader import download_file
 from .logging_utils import Printer
@@ -14,10 +14,12 @@ from .models import DuplicateEntry, RunStats, SearchResult, SongStatus
 from .playlist import read_playlist, read_playlists_dir, write_example_playlist
 from .reports import (
     HAS_XLSX,
+    format_elapsed,
     print_summary,
     save_csv,
     save_duplicates_csv,
     save_errors_log,
+    save_summary_json,
     save_xlsx,
 )
 from .search import SearchEngine, dedupe_songs
@@ -41,8 +43,10 @@ def _run_playlist(
     verbose: bool,
     no_color: bool,
 ) -> RunStats:
+    run_started = time.time()
     p = Printer(color=not no_color, verbose=verbose)
     engine = SearchEngine(cfg, printer=p)
+    engine.set_run_context(len(songs))
 
     downloads_dir = output_dir / "downloads"
     downloads_dir.mkdir(parents=True, exist_ok=True)
@@ -54,11 +58,11 @@ def _run_playlist(
 
     stats = RunStats(total=len(unique_songs), duplicates=len(duplicates))
 
-    p.bold(f"\nLEGAL MUSIC v{VERSION}  |  {playlist_name}")
-    p.info(f"input rows             : {len(songs)}")
-    p.info(f"unique after cleanup   : {len(unique_songs)}")
-    p.info(f"active sources         : {', '.join(cfg.enabled_source_names())}")
-    p.info(f"mode                   : {'dry-run' if dry_run else 'download'}")
+    search_mode = "maximize" if cfg.maximize_mode else "fast" if cfg.fast_mode else "balanced"
+    mode_label = "dry-run" if dry_run else "download"
+    p.bold(f"\nLEGAL MUSIC v{VERSION}  |  {playlist_name}  [{mode_label} / {search_mode}]")
+    p.info(f"songs                  : {len(unique_songs)} unique  ({len(songs)} input)")
+    p.info(f"sources                : {', '.join(cfg.enabled_source_names())}")
 
     if duplicates:
         p.warn(f"duplicates skipped     : {len(duplicates)}")
@@ -74,14 +78,21 @@ def _run_playlist(
     total = len(unique_songs)
 
     for idx, song in enumerate(unique_songs, 1):
-        p.progress(idx, total, song)
+        song_started = time.time()
+        if verbose:
+            p.vlog(f"searching: {song}")
         result = engine.search_song(song)
+        song_elapsed = time.time() - song_started
+        phase_tag = " [B]" if result.resolved_phase == "phase_b" else ""
+        t = f"{song_elapsed:.1f}s"
 
         if result.status == SongStatus.DOWNLOADED and result.direct_url:
             if dry_run:
                 stats.downloaded += 1
-                p.ok(f"  + downloadable found  | score={result.score:.2f} | {result.source}")
-                p.vlog(f"direct url: {result.direct_url}")
+                p.ok(_format_song_line(idx, total, song, f"✓ {result.source}  score={result.score:.2f}{phase_tag}  {t}"))
+                if verbose and result.matched_query:
+                    p.dim(f"    {result.result_tier.value}  query={result.matched_query_kind or 'raw'}")
+                    p.dim(f"    {result.direct_url}")
             else:
                 try:
                     saved = download_file(
@@ -89,36 +100,53 @@ def _run_playlist(
                     )
                     result.saved_file = str(saved)
                     stats.downloaded += 1
-                    p.ok(f"  + downloaded          | score={result.score:.2f} | {saved.name}")
+                    p.ok(_format_song_line(idx, total, song, f"✓ {saved.name}  score={result.score:.2f}{phase_tag}  {t}"))
+                    if verbose and result.matched_query:
+                        p.dim(f"    {result.result_tier.value}  query={result.matched_query_kind or 'raw'}")
                 except Exception as e:
                     result.status = SongStatus.DOWNLOAD_ERROR
                     result.note = f"Download error: {e}"
                     stats.download_error += 1
                     err_msg = f"[DOWNLOAD ERROR] {song} | {result.direct_url} | {e}"
                     errors.append(err_msg)
-                    p.err(f"  x download error      | {e}")
+                    p.err(_format_song_line(idx, total, song, f"! download error  {t}"))
 
         elif result.status == SongStatus.PAGE_FOUND:
             stats.page_found += 1
-            p.warn(f"  o page found          | score={result.score:.2f} | {result.source}")
+            fallback_tag = " [fallback]" if result.fallback_used else ""
+            p.warn(_format_song_line(idx, total, song, f"~ {result.source}  score={result.score:.2f}{phase_tag}{fallback_tag}  {t}"))
+            if verbose and result.matched_query:
+                p.dim(f"    {result.result_tier.value}  query={result.matched_query_kind or 'raw'}")
             if verbose and result.page_url:
                 p.dim(f"    {result.page_url}")
 
         elif result.status == SongStatus.BLOCKED:
             stats.blocked += 1
-            p.warn(f"  ! blocked             | {result.source}")
+            p.warn(_format_song_line(idx, total, song, f"blocked {result.source}  {t}"))
 
         elif result.status == SongStatus.NOT_FOUND:
             stats.not_found += 1
-            p.dim("  - not found")
+            best_tag = f"  best={result.best_seen_score:.2f}@{result.best_seen_source}" if result.best_seen_score else ""
+            p.dim(_format_song_line(idx, total, song, f"- not found{best_tag}  {t}"))
 
         elif result.status in (SongStatus.ERROR, SongStatus.DOWNLOAD_ERROR):
             stats.errors += 1
             errors.append(f"[ERROR] {song} | {result.note}")
-            p.err(f"  x error               | {result.note}")
+            p.err(_format_song_line(idx, total, song, f"! error  {t}"))
+
+        if result.status in {SongStatus.DOWNLOADED, SongStatus.PAGE_FOUND}:
+            if result.resolved_phase == "phase_a":
+                stats.phase_a_wins += 1
+            elif result.resolved_phase == "phase_b":
+                stats.phase_b_wins += 1
 
         results.append(result)
         time.sleep(cfg.delay)
+
+    stats.elapsed_seconds = time.time() - run_started
+    stats.avg_seconds_per_song = stats.elapsed_seconds / max(1, stats.total)
+    useful_results = stats.downloaded + stats.page_found
+    stats.avg_seconds_per_success = stats.elapsed_seconds / useful_results if useful_results else 0.0
 
     # Save reports
     if cfg.csv_report:
@@ -140,14 +168,144 @@ def _run_playlist(
         err_path = output_dir / "errors.log"
         save_errors_log(errors, err_path)
 
+    engine.save_caches()
+
     paths: dict[str, Path | None] = {
         "csv report": output_dir / "report.csv" if cfg.csv_report else None,
         "xlsx report": xlsx_path,
+        "run summary": output_dir / "summary.json",
         "duplicates": dup_path,
         "errors log": err_path,
         "downloads": downloads_dir if not dry_run else None,
     }
     print_summary(stats, paths, use_color=not no_color)
+
+    rescued_by_fallback = sum(1 for r in results if r.fallback_used and r.status in {SongStatus.DOWNLOADED, SongStatus.PAGE_FOUND})
+    source_successes: dict[str, int] = {}
+    query_successes: dict[str, int] = {}
+    tier_counts: dict[str, int] = {}
+    bandcamp_fallback_wins = 0
+    for result in results:
+        if result.status in {SongStatus.DOWNLOADED, SongStatus.PAGE_FOUND}:
+            if result.source:
+                source_successes[result.source] = source_successes.get(result.source, 0) + 1
+            if result.matched_query_kind:
+                query_successes[result.matched_query_kind] = query_successes.get(result.matched_query_kind, 0) + 1
+            tier_counts[result.result_tier.value] = tier_counts.get(result.result_tier.value, 0) + 1
+            if result.source == "Bandcamp" and result.status == SongStatus.PAGE_FOUND:
+                bandcamp_fallback_wins += 1
+
+    if verbose and (source_successes or query_successes or rescued_by_fallback):
+        p.info("")
+        p.dim("Recall summary:")
+        if rescued_by_fallback:
+            p.dim(f"  rescued by fallback   : {rescued_by_fallback}")
+        if bandcamp_fallback_wins:
+            p.dim(f"  bandcamp page wins    : {bandcamp_fallback_wins}")
+        for source, count in sorted(source_successes.items(), key=lambda item: (-item[1], item[0])):
+            p.dim(f"  source success        : {source} = {count}")
+        for kind, count in sorted(query_successes.items(), key=lambda item: (-item[1], item[0]))[:6]:
+            p.dim(f"  query success         : {kind} = {count}")
+        for tier, count in sorted(tier_counts.items(), key=lambda item: item[0]):
+            p.dim(f"  result tier           : {tier} = {count}")
+
+    if verbose and engine.run_context.sources:
+        p.info("")
+        p.dim("Runtime summary:")
+        for src, metric in sorted(
+            engine.run_context.sources.items(),
+            key=lambda item: (-item[1].usefulness_score, item[0]),
+        ):
+            useful_rate = metric.useful_count / max(1, metric.search_attempts)
+            p.dim(
+                "  "
+                f"{src}: usefulness={metric.usefulness_score:.2f} "
+                f"avg_search={metric.avg_search_latency:.2f}s "
+                f"time={metric.total_time:.1f}s "
+                f"useful_rate={useful_rate:.2f} "
+                f"downloads={metric.downloaded_count} "
+                f"pages={metric.page_found_count} "
+                f"weak_page_ratio={metric.low_value_page_ratio:.2f} "
+                f"cache_hits={metric.cached_hits} "
+                f"redundant_skips={metric.skipped_redundant}"
+            )
+
+    if verbose and engine.phase_metrics:
+        p.info("")
+        p.dim("Phase summary:")
+        for phase_name, phase in engine.phase_metrics.items():
+            p.dim(
+                "  "
+                f"{phase_name}: songs={phase['songs']} "
+                f"downloads={phase['downloads']} "
+                f"pages={phase['pages']} "
+                f"time={phase['time']:.1f}s"
+            )
+
+    # Show source health status if any issues
+    health_status = {
+        src: engine.run_context.get_source_health(src)
+        for src in engine.run_context.sources.keys()
+    }
+    if verbose and any(h.value != "healthy" for h in health_status.values()):
+        p.info("")
+        p.dim("Source health summary:")
+        for src, health in health_status.items():
+            metric = engine.run_context.sources[src]
+            status_sym = "✓" if health.value == "healthy" else "⚠" if health.value == "degraded" else "✗"
+            p.dim(f"  {status_sym} {src}: {health.value} (ok={metric.success_count}, timeout={metric.timeout_count}, blocked={metric.blocked_count})")
+
+    source_summary = {
+        src: {
+            "health": metric.health.value,
+            "search_attempts": metric.search_attempts,
+            "inspect_attempts": metric.inspect_attempts,
+            "useful_count": metric.useful_count,
+            "downloaded_count": metric.downloaded_count,
+            "page_found_count": metric.page_found_count,
+            "weak_page_count": metric.weak_page_count,
+            "low_value_page_ratio": round(metric.low_value_page_ratio, 3),
+            "cache_hits": metric.cached_hits,
+            "redundant_skips": metric.skipped_redundant,
+            "avg_search_latency": round(metric.avg_search_latency, 3),
+            "avg_inspect_latency": round(metric.avg_inspect_latency, 3),
+            "time_spent": round(metric.total_time, 3),
+            "usefulness_score": round(metric.usefulness_score, 3),
+            "query_metrics": {
+                kind: {
+                    "attempts": q.attempts,
+                    "cache_hits": q.cache_hits,
+                    "zero_results": q.zero_results,
+                    "useful_hits": q.useful_hits,
+                    "avg_latency": round(q.avg_latency, 3),
+                    "usefulness": round(q.usefulness, 3),
+                    "redundant_skips": q.skipped_redundant,
+                }
+                for kind, q in metric.query_metrics.items()
+            },
+        }
+        for src, metric in engine.run_context.sources.items()
+    }
+    summary = {
+        "playlist": playlist_name,
+        "mode": "dry-run" if dry_run else "download",
+        "profile": search_mode,
+        "stats": stats.__dict__,
+        "elapsed_seconds": round(stats.elapsed_seconds, 3),
+        "elapsed_human": format_elapsed(stats.elapsed_seconds),
+        "avg_seconds_per_song": round(stats.avg_seconds_per_song, 3),
+        "avg_seconds_per_success": round(stats.avg_seconds_per_success, 3),
+        "phase_a_wins": stats.phase_a_wins,
+        "phase_b_wins": stats.phase_b_wins,
+        "rescued_by_fallback": rescued_by_fallback,
+        "bandcamp_page_wins": bandcamp_fallback_wins,
+        "source_successes": source_successes,
+        "query_successes": query_successes,
+        "tier_counts": tier_counts,
+        "source_runtime": source_summary,
+        "phase_runtime": engine.phase_metrics,
+    }
+    save_summary_json(summary, output_dir / "summary.json")
 
     return stats
 
@@ -226,22 +384,32 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     else:
         p.warn(f"  no config at {cfg_path} (using defaults)")
 
-    # DuckDuckGo connectivity
+    # DuckDuckGo connectivity check (optional, not critical)
     try:
         import requests as req
 
-        r = req.get("https://html.duckduckgo.com/html/?q=test", timeout=8)
+        r = req.get("https://html.duckduckgo.com/html/?q=test", timeout=5)
         r.raise_for_status()
         p.ok("  ok  DuckDuckGo connectivity")
     except Exception as e:
-        p.err(f"  DuckDuckGo unreachable: {e}")
+        p.warn(f"  DuckDuckGo unreachable (optional): {e}")
+
+    # Internet Archive API check (critical)
+    try:
+        import requests as req
+
+        r = req.get("https://archive.org/advancedsearch.php?q=test&rows=1&output=json", timeout=5)
+        r.raise_for_status()
+        p.ok("  ok  Internet Archive API")
+    except Exception as e:
+        p.err(f"  Internet Archive API unreachable: {e}")
         all_ok = False
 
     p.separator()
     if all_ok:
-        p.ok("All checks passed.")
+        p.ok("All critical checks passed.")
     else:
-        p.warn("Some checks failed. See above.")
+        p.warn("Some critical checks failed. See above.")
     return 0 if all_ok else 1
 
 
@@ -269,12 +437,77 @@ def cmd_cfg(args: argparse.Namespace) -> int:
 def cmd_src(args: argparse.Namespace) -> int:
     cfg_path = Path(args.config)
     cfg = AppConfig.load(cfg_path) if cfg_path.exists() else AppConfig()
-    p = Printer()
-    p.bold("Configured sources:")
-    for s in cfg.sources:
-        status = "enabled" if s.enabled else "disabled"
-        marker = "+" if s.enabled else "-"
-        p.info(f"  [{marker}] {s.name}  ({status})")
+    p = Printer(color=not getattr(args, "no_color", False))
+
+    action = getattr(args, "src_action", None)
+    name = getattr(args, "src_name", None)
+
+    if action is None:
+        # List sources with preset reference
+        p.bold("Sources:")
+        for s in cfg.sources:
+            marker = "+" if s.enabled else "-"
+            p.info(f"  [{marker}] {s.name}")
+        p.info("")
+        p.dim("Presets  : fast (IA only) | balanced (IA+FMA+Bandcamp) | maximize (all)")
+        p.dim("Commands : legal-music src enable NAME")
+        p.dim("           legal-music src disable NAME")
+        p.dim("           legal-music src preset PRESET")
+        return 0
+
+    if not name:
+        p.err(f"Error: 'src {action}' requires a name argument.")
+        return 1
+
+    if action == "enable":
+        src = cfg.find_source(name)
+        if src is None:
+            p.err(f"Unknown source: {name!r}")
+            p.info(f"Known sources: {', '.join(ALL_SOURCE_NAMES)}")
+            return 1
+        was_enabled = src.enabled
+        src.enabled = True
+        cfg.save(cfg_path)
+        if was_enabled:
+            p.info(f"  {src.name} was already enabled")
+        else:
+            p.ok(f"  enabled: {src.name}")
+        p.dim(f"  saved: {cfg_path}")
+        return 0
+
+    if action == "disable":
+        src = cfg.find_source(name)
+        if src is None:
+            p.err(f"Unknown source: {name!r}")
+            p.info(f"Known sources: {', '.join(ALL_SOURCE_NAMES)}")
+            return 1
+        was_enabled = src.enabled
+        src.enabled = False
+        cfg.save(cfg_path)
+        if not was_enabled:
+            p.info(f"  {src.name} was already disabled")
+        else:
+            p.warn(f"  disabled: {src.name}")
+        p.dim(f"  saved: {cfg_path}")
+        return 0
+
+    if action == "preset":
+        try:
+            enabled_names = cfg.apply_source_preset(name)
+        except ValueError as exc:
+            p.err(f"Error: {exc}")
+            choices = ", ".join(SOURCE_PRESETS.keys())
+            p.info(f"Available presets: {choices}")
+            return 1
+        cfg.save(cfg_path)
+        p.bold(f"Preset applied: {name}")
+        for src in cfg.sources:
+            marker = "+" if src.enabled else "-"
+            p.info(f"  [{marker}] {src.name}")
+        p.dim(f"  saved: {cfg_path}")
+        _ = enabled_names  # used implicitly via cfg.sources
+        return 0
+
     return 0
 
 
@@ -339,6 +572,7 @@ def cmd_batch_dl(args: argparse.Namespace) -> int:
 
 
 def _batch_run(args: argparse.Namespace, dry_run: bool) -> int:
+    batch_started = time.time()
     playlist_dir = Path(args.playlist_dir)
     cfg_path = Path(args.config)
     cfg = AppConfig.load(cfg_path) if cfg_path.exists() else AppConfig()
@@ -372,17 +606,25 @@ def _batch_run(args: argparse.Namespace, dry_run: bool) -> int:
         total_stats.downloaded += stats.downloaded
         total_stats.page_found += stats.page_found
         total_stats.not_found += stats.not_found
+        total_stats.blocked += stats.blocked
+        total_stats.download_error += stats.download_error
         total_stats.errors += stats.errors
         total_stats.duplicates += stats.duplicates
+        total_stats.total += stats.total
 
     p.separator()
     p.bold("BATCH COMPLETE")
     p.info(f"playlists processed    : {len(playlists)}")
+    p.info(f"total songs processed  : {total_stats.total}")
     p.ok(f"total downloaded       : {total_stats.downloaded}") if total_stats.downloaded else None
     p.warn(f"total page found       : {total_stats.page_found}") if total_stats.page_found else None
     p.info(f"total not found        : {total_stats.not_found}")
     if total_stats.errors:
         p.err(f"total errors           : {total_stats.errors}")
+    batch_elapsed = time.time() - batch_started
+    p.info(f"elapsed time           : {format_elapsed(batch_elapsed)}")
+    p.info(f"avg per playlist       : {batch_elapsed / max(1, len(playlists)):.1f}s")
+    p.info(f"avg per song           : {batch_elapsed / max(1, total_stats.total):.1f}s")
 
     return 0
 
@@ -413,14 +655,34 @@ def cmd_stats(args: argparse.Namespace) -> int:
         return 1
 
     counts: dict[str, int] = {}
+    sources: dict[str, int] = {}
+    query_kinds: dict[str, int] = {}
+    rescued = 0
+    borderline = 0
     for row in rows:
         s = row.get("status", "unknown")
         counts[s] = counts.get(s, 0) + 1
+        if row.get("source"):
+            sources[row["source"]] = sources.get(row["source"], 0) + 1
+        if row.get("matched_query_kind"):
+            query_kinds[row["matched_query_kind"]] = query_kinds.get(row["matched_query_kind"], 0) + 1
+        if row.get("fallback_used") == "yes":
+            rescued += 1
+        if s == "not_found" and row.get("best_seen_source"):
+            borderline += 1
 
     p.bold(f"Stats from: {report_path}")
     p.info(f"total entries          : {len(rows)}")
     for status, count in sorted(counts.items(), key=lambda x: -x[1]):
         p.info(f"  {status:<22} : {count}")
+    if rescued:
+        p.info(f"  rescued_by_fallback     : {rescued}")
+    if borderline:
+        p.info(f"  borderline_not_found    : {borderline}")
+    for source, count in sorted(sources.items(), key=lambda x: (-x[1], x[0]))[:6]:
+        p.info(f"  source:{source:<15} : {count}")
+    for kind, count in sorted(query_kinds.items(), key=lambda x: (-x[1], x[0]))[:6]:
+        p.info(f"  query:{kind:<16} : {count}")
     return 0
 
 
@@ -435,7 +697,22 @@ def _resolve_output_dir(args: argparse.Namespace, cfg: AppConfig, playlist_path:
     return cfg.output_dir / playlist_path.stem
 
 
+def _compact_song(song: str, width: int = 46) -> str:
+    clean = " ".join(song.split())
+    if len(clean) <= width:
+        return clean
+    return f"{clean[: width - 1]}…"
+
+
+def _format_song_line(index: int, total: int, song: str, outcome: str) -> str:
+    return f"[{index}/{total}] {_compact_song(song)} | {outcome}"
+
+
 def _apply_cfg_overrides(cfg: AppConfig, args: argparse.Namespace) -> None:
+    if hasattr(args, "fast") and args.fast:
+        cfg.apply_fast_mode()
+    if hasattr(args, "maximize") and args.maximize:
+        cfg.apply_maximize_mode()
     if hasattr(args, "delay") and args.delay is not None:
         cfg.delay = args.delay
     if hasattr(args, "max_results") and args.max_results is not None:
@@ -447,7 +724,7 @@ def _apply_cfg_overrides(cfg: AppConfig, args: argparse.Namespace) -> None:
 # ---------------------------------------------------------------------------
 
 _EPILOG = """\
-Legal sources only: Bandcamp, Internet Archive, Jamendo, Pixabay Music.
+Legal sources only: Bandcamp, Internet Archive, Free Music Archive, Jamendo, Pixabay Music.
 No piracy, no DRM bypass, no stream ripping.
 """
 
@@ -461,6 +738,8 @@ _RUN_FLAGS = [
     (("-o", "--output"), dict(default=None, help="output directory override")),
     (("--delay",), dict(type=float, default=None, help="delay between requests (seconds)")),
     (("--max-results",), dict(type=int, default=None, help="max search results per source")),
+    (("--fast",), dict(action="store_true", help="fast mode: fewer variants, lower timeouts")),
+    (("--maximize",), dict(action="store_true", help="maximize recall mode: broader queries and fallback")),
 ]
 
 
@@ -505,7 +784,32 @@ def build_parser() -> argparse.ArgumentParser:
     p_cfg.set_defaults(func=cmd_cfg)
 
     # src
-    p_src = sub.add_parser("src", help="list configured sources")
+    p_src = sub.add_parser(
+        "src",
+        help="list or manage sources (enable, disable, preset)",
+        description=(
+            "Manage search sources.\n\n"
+            "  legal-music src                     list configured sources\n"
+            "  legal-music src enable NAME         enable a source\n"
+            "  legal-music src disable NAME        disable a source\n"
+            "  legal-music src preset PRESET       apply a source preset\n\n"
+            "Presets: fast (Internet Archive only), balanced (IA+FMA+Bandcamp), maximize (all)"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p_src.add_argument(
+        "src_action",
+        nargs="?",
+        choices=["enable", "disable", "preset"],
+        metavar="ACTION",
+        help="enable | disable | preset",
+    )
+    p_src.add_argument(
+        "src_name",
+        nargs="?",
+        metavar="NAME",
+        help="source name or preset name",
+    )
     _add_common(p_src)
     p_src.set_defaults(func=cmd_src)
 
@@ -547,6 +851,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = build_parser()
-    args = parser.parse_args(argv)
-    return args.func(args)
+    try:
+        parser = build_parser()
+        args = parser.parse_args(argv)
+        return args.func(args)
+    except KeyboardInterrupt:
+        print("\n\nRun cancelled by user.")
+        return 130  # Standard exit code for Ctrl+C

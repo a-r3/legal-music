@@ -278,7 +278,6 @@ class SearchEngine:
                 continue
             self.printer.vlog(f"{phase_name}: search {source.name} with {len(source_variants)} variant(s)")
 
-            useful_from_source = False
             for variant in source_variants:
                 if self._budget_exceeded(song_start) or self._phase_budget_exceeded(song_start, phase_budget):
                     break
@@ -309,7 +308,6 @@ class SearchEngine:
                     )
 
                     if result.status == SongStatus.DOWNLOADED and self._good_enough_download(result):
-                        useful_from_source = True
                         result.resolved_phase = phase_name
                         best_downloadable = self._pick_better(best_downloadable, result)
                         self.run_context.record_source_useful(source.name, variant.kind, downloaded=True)
@@ -323,7 +321,6 @@ class SearchEngine:
                                 "best_seen": best_seen,
                             }
                     elif result.status == SongStatus.PAGE_FOUND and self._good_enough_page(result):
-                        useful_from_source = True
                         result.resolved_phase = phase_name
                         best_page = self._pick_better(best_page, result)
                         self.run_context.record_source_useful(
@@ -333,7 +330,6 @@ class SearchEngine:
                             weak_page=result.result_tier == ResultTier.TIER_3_WEAK_PAGE,
                         )
                     elif phase_name == "phase_b" and result.status == SongStatus.PAGE_FOUND and self._good_enough_best_seen(result):
-                        useful_from_source = True
                         rescued = SearchResult(
                             **{**result.__dict__, "fallback_used": True},
                         )

@@ -4,12 +4,24 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "legal-music"
-version = "1.2.0"
-description = "Professional CLI for checking music only on allowed sources"
+version = "2.0.0"
+description = "CLI to find and download music from legal, permitted sources"
 readme = "README.md"
+license = {text = "MIT"}
 requires-python = ">=3.10"
 authors = [
-  {name = "OpenAI"}
+  {name = "legal-music contributors"}
+]
+keywords = ["music", "download", "bandcamp", "archive", "jamendo", "legal"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Environment :: Console",
+  "Topic :: Multimedia :: Sound/Audio",
 ]
 dependencies = [
   "requests>=2.31.0",
@@ -17,8 +29,19 @@ dependencies = [
   "openpyxl>=3.1.0",
 ]
 
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "ruff>=0.4",
+  "build>=1.0",
+]
+
 [project.scripts]
 legal-music = "legal_music.cli:main"
+
+[project.urls]
+"Source" = "https://github.com/your-org/legal-music"
+"Bug Tracker" = "https://github.com/your-org/legal-music/issues"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

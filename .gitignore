@@ -14,8 +14,9 @@ build/
 *.egg-info/
 .DS_Store
 
-# local app data
+# generated output (keep playlists/ dir but not generated output)
 output/
+logs/
 downloads/
 runtime.log
 errors.log
@@ -23,6 +24,10 @@ duplicates.csv
 report.csv
 report.xlsx
 
-# private local files
+# private local config
 config.json
 songs.txt
+
+# keep example files
+!playlists/example.txt
+!config.example.json

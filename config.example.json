@@ -1,27 +1,18 @@
 {
-  "search_targets": [
-    {
-      "name": "Bandcamp",
-      "query": "site:bandcamp.com {query}",
-      "enabled": true
-    },
-    {
-      "name": "Internet Archive",
-      "query": "site:archive.org {query}",
-      "enabled": true
-    },
-    {
-      "name": "Jamendo",
-      "query": "site:jamendo.com {query}",
-      "enabled": true
-    },
-    {
-      "name": "Pixabay Music",
-      "query": "site:pixabay.com/music {query}",
-      "enabled": true
-    }
-  ],
-  "min_downloadable_score": 0.4,
+  "delay": 1.2,
+  "max_results": 8,
+  "timeout": 30,
+  "retry_count": 2,
+  "backoff": 2.0,
+  "min_downloadable_score": 0.40,
   "min_page_score": 0.52,
-  "min_best_seen_score": 0.55
+  "min_best_seen_score": 0.55,
+  "sources": [
+    {"name": "Internet Archive", "enabled": true},
+    {"name": "Bandcamp", "enabled": true},
+    {"name": "Jamendo", "enabled": true},
+    {"name": "Pixabay Music", "enabled": true}
+  ],
+  "csv_report": true,
+  "xlsx_report": true
 }

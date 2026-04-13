@@ -1,0 +1,6 @@
+# Example playlist — one song per line (Artist - Title)
+# Lines starting with # are ignored.
+
+Frank Sinatra - My Way
+John Mayer - Gravity
+Nina Simone - Feeling Good

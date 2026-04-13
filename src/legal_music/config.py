@@ -268,6 +268,10 @@ class AppConfig:
         self.min_page_score = min(self.min_page_score, 0.44)
         self.min_best_seen_score = min(self.min_best_seen_score, 0.35)
         self.early_exit_score = max(self.early_exit_score, 0.98)
+        # Enable additional sources for maximize mode
+        for src in self.sources:
+            if src.name in {"Jamendo", "Pixabay Music"}:
+                src.enabled = True
 
     def validate(self) -> list[str]:
         """Return list of validation error strings (empty = valid)."""

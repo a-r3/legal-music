@@ -182,9 +182,19 @@ class SearchEngine:
             if self._budget_exceeded(song_start):
                 break
             if phase_name == "phase_b":
+                # Skip Phase B if we have strong results already
                 if best_downloadable:
                     break
-                if best_page and best_page.result_tier == ResultTier.TIER_2_STRONG_PAGE and not self.cfg.maximize_mode:
+                if best_page and best_page.result_tier == ResultTier.TIER_2_STRONG_PAGE:
+                    # In balanced mode, stop with strong page; in maximize, try for better
+                    if not self.cfg.maximize_mode:
+                        break
+                # Skip Phase B if nothing useful found AND time pressure is high
+                # This prevents wasting time on songs unlikely to be found
+                time_spent = time.time() - song_start
+                time_remaining = self.cfg.per_song_timeout - time_spent
+                if not best_seen and time_remaining < 2.0 and not self.cfg.maximize_mode:
+                    # Not enough time left and nothing found yet - unlikely to recover
                     break
 
             phase_started = time.time()
@@ -612,8 +622,12 @@ class SearchEngine:
         source_cfg = self.cfg.source_config_for(result.source)
         if source_cfg and source_cfg.min_page_score is not None:
             threshold = source_cfg.min_page_score
+        # Relax Bandcamp threshold slightly in balanced mode for better recall
         if result.source == "Bandcamp":
-            threshold = max(threshold, 0.66)
+            if self.cfg.maximize_mode:
+                threshold = max(threshold, 0.62)  # Stricter in maximize
+            else:
+                threshold = max(threshold, 0.60)  # Slightly relaxed in balanced
         if result.result_tier == ResultTier.TIER_3_WEAK_PAGE:
             threshold = max(threshold, 0.72)
         return result.score >= threshold
@@ -628,8 +642,15 @@ class SearchEngine:
             return ResultTier.TIER_1_DOWNLOADABLE
         if result.status == SongStatus.PAGE_FOUND:
             if result.source in _PAGE_HEAVY_SOURCES:
-                if result.score >= 0.78 and not result.fallback_used:
-                    return ResultTier.TIER_2_STRONG_PAGE
+                # Bandcamp: adjust threshold based on mode
+                if self.cfg.maximize_mode:
+                    # More selective in maximize mode
+                    if result.score >= 0.80 and not result.fallback_used:
+                        return ResultTier.TIER_2_STRONG_PAGE
+                else:
+                    # More lenient in balanced mode for better recall
+                    if result.score >= 0.74 and not result.fallback_used:
+                        return ResultTier.TIER_2_STRONG_PAGE
                 return ResultTier.TIER_3_WEAK_PAGE
             if result.score >= max(0.60, self.cfg.min_page_score):
                 return ResultTier.TIER_2_STRONG_PAGE

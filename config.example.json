@@ -1,0 +1,27 @@
+{
+  "search_targets": [
+    {
+      "name": "Bandcamp",
+      "query": "site:bandcamp.com {query}",
+      "enabled": true
+    },
+    {
+      "name": "Internet Archive",
+      "query": "site:archive.org {query}",
+      "enabled": true
+    },
+    {
+      "name": "Jamendo",
+      "query": "site:jamendo.com {query}",
+      "enabled": true
+    },
+    {
+      "name": "Pixabay Music",
+      "query": "site:pixabay.com/music {query}",
+      "enabled": true
+    }
+  ],
+  "min_downloadable_score": 0.4,
+  "min_page_score": 0.52,
+  "min_best_seen_score": 0.55
+}

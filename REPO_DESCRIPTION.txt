@@ -1,0 +1,1 @@
+Professional CLI for finding and downloading music only from permitted sources.

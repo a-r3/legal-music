@@ -1,0 +1,5 @@
+include README.md
+include LICENSE
+include config.example.json
+include songs.example.txt
+recursive-include src *.py

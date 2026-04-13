@@ -59,8 +59,8 @@ class AppConfig:
     timeout: int = 10
     retry_count: int = 1
     backoff: float = 1.0
-    per_song_timeout: int = 16
-    phase_a_budget_ratio: float = 0.82
+    per_song_timeout: int = 15
+    phase_a_budget_ratio: float = 0.65
 
     # Scoring
     min_downloadable_score: float = 0.46

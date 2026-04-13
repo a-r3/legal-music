@@ -35,9 +35,10 @@ _SOURCE_QUERY_ORDER: dict[str, list[str]] = {
     "Internet Archive": [
         "artist_title",
         "artist_title_quoted",
-        "artist_title_core",
+        "title_quoted",
         "title_core",
         "title_only",
+        "artist_title_core",
         "normalized_full",
     ],
     "Bandcamp": [
@@ -46,7 +47,7 @@ _SOURCE_QUERY_ORDER: dict[str, list[str]] = {
         "title_quoted",
         "title_core",
         "title_only",
-        "title_artist_inverted",
+        "artist_title_core",
         "raw_quoted",
     ],
     "Free Music Archive": [
@@ -55,11 +56,13 @@ _SOURCE_QUERY_ORDER: dict[str, list[str]] = {
         "title_quoted",
         "title_core",
         "title_only",
+        "artist_title_core",
         "normalized_full",
     ],
     "Jamendo": [
         "artist_title",
-        "artist_title_core",
+        "artist_title_quoted",
+        "title_quoted",
         "title_core",
         "title_only",
         "normalized_full",
@@ -435,7 +438,8 @@ class SearchEngine:
 
         def sort_key(item: QueryVariant) -> tuple[float, float]:
             base = float(ranking.get(item.kind, len(ranking)))
-            fallback_penalty = 0.55 if item.is_fallback and phase_name == "phase_a" else 0.18 if item.is_fallback else 0.0
+            # Reduce fallback penalty: title searches in Phase A are high-recall, not truly fallback
+            fallback_penalty = 0.10 if item.is_fallback and phase_name == "phase_a" and item.kind.startswith("title") else 0.18 if item.is_fallback else 0.0
             learned = 0.0
             if self.cfg.adaptive_queries and metrics is not None:
                 learned -= metrics.query_usefulness(item.kind) * (1.2 if phase_name == "phase_a" else 0.8)

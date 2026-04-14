@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ..utils import (
+    _has_cyrillic_or_turkic,
     normalize_song,
     normalize_space,
     parse_artist_title,
@@ -11,6 +12,7 @@ from ..utils import (
     strip_bracket_noise,
     strip_feature_suffix,
     strip_mix_suffix,
+    transliterate_cyrillic_turkic,
 )
 
 
@@ -71,6 +73,20 @@ def build_query_variants(song: str) -> list[QueryVariant]:
         add(title_core, "title_core", fallback=True)
     if accent_title and accent_title.casefold() not in {title.casefold(), title_core.casefold()}:
         add(accent_title, "accent_folded_title", fallback=True)
+
+    # Add transliterated variants if the input contains Cyrillic or Turkic characters
+    if _has_cyrillic_or_turkic(raw):
+        translit_raw = transliterate_cyrillic_turkic(raw)
+        if translit_raw and translit_raw.casefold() != raw.casefold():
+            add(translit_raw, "translit_raw", fallback=True)
+        
+        # Transliterated artist/title if both are present
+        if artist and title:
+            translit_artist = transliterate_cyrillic_turkic(artist)
+            translit_title = transliterate_cyrillic_turkic(title)
+            translit_artist_title = normalize_space(f"{translit_artist} {translit_title}")
+            if translit_artist_title and translit_artist_title.casefold() != f"{artist} {title}".casefold():
+                add(translit_artist_title, "translit_artist_title", fallback=True)
 
     seen: set[str] = set()
     deduped: list[QueryVariant] = []

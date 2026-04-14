@@ -1,5 +1,8 @@
 """Engine behavior regressions around presets and balanced mode."""
 
+import time
+from collections import defaultdict
+
 from legal_music.config import AppConfig
 from legal_music.models import ResultTier, SearchResult, SongStatus
 from legal_music.search.engine import SearchEngine
@@ -92,3 +95,77 @@ def test_balanced_can_rescue_strong_bandcamp_best_seen():
     )
 
     assert engine._good_enough_best_seen(result) is True
+
+
+def test_phase_a_internet_archive_prioritizes_translit_for_non_ascii_song():
+    cfg = AppConfig()
+    engine = SearchEngine(cfg)
+
+    variants = build_query_variants("Молчат Дома - Судно")
+    selected = engine._variants_for_source(
+        "Internet Archive",
+        variants,
+        cfg.balanced_query_variants,
+        classify_song("Молчат Дома - Судно"),
+        "phase_a",
+    )
+
+    assert [variant.kind for variant in selected] == [
+        "artist_title",
+        "translit_artist_title",
+        "title_quoted",
+    ]
+
+
+def test_phase_a_fma_prioritizes_translit_for_non_ascii_song():
+    cfg = AppConfig()
+    engine = SearchEngine(cfg)
+
+    variants = build_query_variants("Молчат Дома - Судно")
+    selected = engine._variants_for_source(
+        "Free Music Archive",
+        variants,
+        cfg.balanced_query_variants,
+        classify_song("Молчат Дома - Судно"),
+        "phase_a",
+    )
+
+    assert [variant.kind for variant in selected] == [
+        "artist_title",
+        "translit_artist_title",
+    ]
+
+
+def test_phase_a_exits_after_two_leading_zero_result_attempts_on_ia(monkeypatch):
+    cfg = AppConfig()
+    engine = SearchEngine(cfg)
+
+    search_calls: list[str] = []
+
+    def fake_search_source(source, song, variant):
+        search_calls.append(variant.kind)
+        return []
+
+    monkeypatch.setattr(engine, "_search_source", fake_search_source)
+    monkeypatch.setattr(engine, "_ordered_sources", lambda profile, phase_name: [type("S", (), {"name": "Internet Archive"})()])
+
+    variants = build_query_variants("Artist - Song")
+    result = engine._run_phase(
+        phase_name="phase_a",
+        song="Artist - Song",
+        profile=classify_song("Artist - Song"),
+        variants=variants,
+        variant_limit=cfg.balanced_query_variants,
+        song_start=time.time(),
+        phase_budget=9999.0,
+        seen_urls=set(),
+        seen_queries_by_source=defaultdict(set),
+        best_downloadable=None,
+        best_page=None,
+        best_seen=None,
+    )
+
+    assert result["best_downloadable"] is None
+    assert result["best_page"] is None
+    assert result["best_seen"] is None
+    assert search_calls == ["artist_title", "title_quoted"]

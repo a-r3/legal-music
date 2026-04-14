@@ -34,8 +34,10 @@ _SOURCE_REGISTRY: dict[str, type[SourceAdapter]] = {
 _SOURCE_QUERY_ORDER: dict[str, list[str]] = {
     "Internet Archive": [
         "artist_title",
+        "translit_artist_title",
         "title_quoted",
         "artist_title_quoted",
+        "translit_raw",
         "raw_quoted",
         "title_core",
         "title_only",
@@ -46,6 +48,7 @@ _SOURCE_QUERY_ORDER: dict[str, list[str]] = {
         "artist_title",
         "artist_title_quoted",
         "title_quoted",
+        "translit_artist_title",
         "title_core",
         "title_only",
         "artist_title_core",
@@ -53,9 +56,11 @@ _SOURCE_QUERY_ORDER: dict[str, list[str]] = {
     ],
     "Free Music Archive": [
         "artist_title",
+        "translit_artist_title",
         "title_quoted",
-        "title_only",
+        "translit_raw",
         "artist_title_quoted",
+        "title_only",
         "title_core",
         "artist_title_core",
         "normalized_full",
@@ -64,6 +69,7 @@ _SOURCE_QUERY_ORDER: dict[str, list[str]] = {
         "artist_title",
         "artist_title_quoted",
         "title_quoted",
+        "translit_artist_title",
         "title_core",
         "title_only",
         "normalized_full",
@@ -82,6 +88,10 @@ _SELECTIVE_FALLBACK_SOURCES = {"Bandcamp"}
 _OPT_IN_SOURCES = {"Jamendo", "Pixabay Music"}
 _DOWNLOAD_FIRST_SOURCES = _PRIMARY_SOURCES | _SECONDARY_SOURCES | {"Jamendo"}
 _PAGE_HEAVY_SOURCES = _SELECTIVE_FALLBACK_SOURCES
+_PHASE_A_ZERO_RESULT_EXIT: dict[str, int] = {
+    "Internet Archive": 2,
+    "Free Music Archive": 2,
+}
 
 
 def build_session(cfg: AppConfig) -> requests.Session:
@@ -187,13 +197,27 @@ class SearchEngine:
             if self._budget_exceeded(song_start):
                 break
             if phase_name == "phase_b":
-                # Skip Phase B if we have strong results already
-                if best_downloadable:
+                # Skip Phase B if we have strong enough results already
+                # Use early_exit_score to determine if we should attempt phase_b
+                if best_downloadable and best_downloadable.score >= self.cfg.early_exit_score:
+                    # Strong downloadable match found - skip expensive phase B
                     break
+                if best_downloadable:
+                    # Downloadable found but score below early_exit threshold
+                    # In balanced mode, try phase B only if score is weak
+                    if not self.cfg.maximize_mode and best_downloadable.score < 0.60:
+                        pass  # Continue to phase B to try to improve
+                    elif self.cfg.maximize_mode:
+                        pass  # Maximize mode always tries phase B for better matches
+                    else:
+                        # Balanced mode with moderate score - skip phase B
+                        break
+                
                 if best_page and best_page.result_tier == ResultTier.TIER_2_STRONG_PAGE:
                     # In balanced mode, stop with strong page; in maximize, try for better
                     if not self.cfg.maximize_mode:
                         break
+                
                 # Skip Phase B if nothing useful found AND time pressure is high
                 # This prevents wasting time on songs unlikely to be found
                 time_spent = time.time() - song_start
@@ -306,6 +330,7 @@ class SearchEngine:
                 continue
             self.printer.vlog(f"{phase_name}: search {source.name} with {len(source_variants)} variant(s)")
 
+            leading_zero_result_attempts = 0
             for variant in source_variants:
                 if self._budget_exceeded(song_start) or self._phase_budget_exceeded(song_start, phase_budget):
                     break
@@ -318,7 +343,16 @@ class SearchEngine:
                 if source.name in _PAGE_HEAVY_SOURCES and not self.cfg.maximize_mode:
                     urls = urls[:1]
                 if not urls:
+                    leading_zero_result_attempts += 1
+                    if self._should_early_exit_phase_a_zero_results(source.name, leading_zero_result_attempts):
+                        self.printer.vlog(
+                            f"  {phase_name}: early exit {source.name} ({leading_zero_result_attempts} leading zero-result variants)"
+                        )
+                        break
                     continue
+
+                # Only leading zero-result attempts trigger the conservative Phase A cutoff.
+                leading_zero_result_attempts = 0
 
                 for url in urls:
                     if self._budget_exceeded(song_start) or self._phase_budget_exceeded(song_start, phase_budget):
@@ -558,6 +592,10 @@ class SearchEngine:
             return (base + fallback_penalty + self._query_profile_bias(item.kind, profile) + learned, len(item.query))
 
         return sorted(variants, key=sort_key)[:limit]
+
+    def _should_early_exit_phase_a_zero_results(self, source_name: str, zero_result_attempts: int) -> bool:
+        cutoff = _PHASE_A_ZERO_RESULT_EXIT.get(source_name)
+        return cutoff is not None and zero_result_attempts >= cutoff
 
     def _source_has_download_value(self, source_name: str) -> bool:
         metrics = self.run_context.sources.get(source_name)

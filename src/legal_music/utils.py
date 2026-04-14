@@ -13,6 +13,57 @@ _PROD_RE = re.compile(r"\b(prod\.?|produced by)\b", re.IGNORECASE)
 _SEPARATOR_RE = re.compile(r"\s*(?:-|–|—|:|\||·|•|_)\s*")
 _BRACKETED_RE = re.compile(r"(\([^)]*\)|\[[^\]]*\]|\{[^}]*\})")
 
+# Cyrillic to Latin transliteration table
+_CYRILLIC_TO_LATIN = {
+    'а': 'a', 'б': 'b', 'в': 'v', 'г': 'g', 'д': 'd', 'е': 'e', 'ё': 'yo',
+    'ж': 'zh', 'з': 'z', 'и': 'i', 'й': 'y', 'к': 'k', 'л': 'l', 'м': 'm',
+    'н': 'n', 'о': 'o', 'п': 'p', 'р': 'r', 'с': 's', 'т': 't', 'у': 'u',
+    'ф': 'f', 'х': 'h', 'ц': 'ts', 'ч': 'ch', 'ш': 'sh', 'щ': 'sch', 'ъ': '',
+    'ы': 'y', 'ь': '', 'э': 'e', 'ю': 'yu', 'я': 'ya',
+    'А': 'A', 'Б': 'B', 'В': 'V', 'Г': 'G', 'Д': 'D', 'Е': 'E', 'Ё': 'Yo',
+    'Ж': 'Zh', 'З': 'Z', 'И': 'I', 'Й': 'Y', 'К': 'K', 'Л': 'L', 'М': 'M',
+    'Н': 'N', 'О': 'O', 'П': 'P', 'Р': 'R', 'С': 'S', 'Т': 'T', 'У': 'U',
+    'Ф': 'F', 'Х': 'H', 'Ц': 'Ts', 'Ч': 'Ch', 'Ш': 'Sh', 'Щ': 'Sch', 'Ъ': '',
+    'Ы': 'Y', 'Ь': '', 'Э': 'E', 'Ю': 'Yu', 'Я': 'Ya',
+}
+
+# Azerbaijani/Turkish specific characters
+_TURKIC_TO_LATIN = {
+    'ə': 'a', 'Ə': 'A', 'ı': 'i', 'İ': 'I', 'ş': 's', 'Ş': 'S',
+    'ğ': 'g', 'Ğ': 'G', 'ü': 'u', 'Ü': 'U', 'ö': 'o', 'Ö': 'O',
+    'ç': 'c', 'Ç': 'C',
+}
+
+
+def transliterate_cyrillic_turkic(text: str) -> str:
+    """Transliterate Cyrillic and Turkic characters to Latin equivalents.
+    
+    Useful for improving search results on sources that have Latin-indexed
+    versions of content originally in Cyrillic or Turkic scripts.
+    
+    Returns the transliterated text, or the original if no transliteration needed.
+    """
+    result = []
+    for char in text:
+        # Try Cyrillic first
+        if char in _CYRILLIC_TO_LATIN:
+            result.append(_CYRILLIC_TO_LATIN[char])
+        # Then Turkic
+        elif char in _TURKIC_TO_LATIN:
+            result.append(_TURKIC_TO_LATIN[char])
+        # Keep other characters as-is
+        else:
+            result.append(char)
+    return ''.join(result)
+
+
+def _has_cyrillic_or_turkic(text: str) -> bool:
+    """Check if text contains Cyrillic or Turkic characters."""
+    for char in text:
+        if char in _CYRILLIC_TO_LATIN or char in _TURKIC_TO_LATIN:
+            return True
+    return False
+
 
 def _simple_tokens(text: str) -> list[str]:
     base = strip_accents(text).casefold()

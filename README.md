@@ -1,62 +1,73 @@
 # legal-music
 
-**legal-music** is a practical Python CLI that finds and downloads music **only from legal, permitted, openly downloadable sources**, optimized for **the most useful legal result**, with bounded search time, source-aware fallback, and adaptive source health handling.
+**legal-music** is a professional Python CLI for finding and downloading music **from legal, permitted, and openly downloadable sources only**.
 
-> **Legal boundary**: This tool does NOT support piracy, DRM bypass, Spotify/Apple Music/YouTube ripping, stream decryption, or any unauthorized content access. Only openly permitted sources are supported.
+It's optimized for practical real-world use:
+- Bounded search time per song
+- Source-aware fallback strategies  
+- Adaptive source health tracking
+- Smart query optimization
+- Practical defaults that work out of the box
+
+> **🔒 Legal boundary**: This tool supports **only** legal and permitted sources. It does **NOT** support piracy, DRM bypass, Spotify/Apple Music/YouTube ripping, stream decryption, or any unauthorized content access.
 
 ## Why legal-music?
 
-- **Practical, never frozen**: Per-song time budgets, adaptive caching, and source health tracking
-- **Higher recall**: Multi-variant query generation, accent folding, mix/remaster cleanup, and source-specific search strategies
-- **Smarter runtime behavior**: Sources and query variants are reordered during a run based on usefulness and latency
-- **Staged search**: Fast high-value pass first, then selective recall expansion only when needed
-- **Legal-only**: Internet Archive (public domain), Bandcamp (free/PWYW), Free Music Archive, optional Jamendo and Pixabay
-- **Simple defaults**: Good out-of-the-box behavior without tuning
-- **Simple search profiles**: balanced default and `--maximize` for stronger staged recall, with `--fast` kept only for quick viability checks
+- **Recall-oriented**: Multi-variant query generation, accent folding, and source-specific search strategies for better hits
+- **Practical defaults**: Good results out of the box without tuning
+- **Smart fallback**: If one source fails, others are automatically tried
+- **Bounded execution**: Per-song time budgets prevent stalling on difficult searches
+- **Source health tracking**: Unhealthy sources are automatically skipped and retried later
+- **Two search profiles**: Balanced mode (fast, practical) and maximize mode (more thorough)
+- **Legal-only**: Internet Archive, Bandcamp, Free Music Archive, Jamendo, Pixabay Music — no piracy
+- **Simple workflow**: dry-run mode to check, then download when ready
 
 ## Design philosophy
 
 This tool is optimized for **maximum practical results under legal-only constraints**:
 
-- Try native source search paths first where available
-- Generate controlled query variants instead of a single brittle search string
-- Reuse run-level and optional persistent cache entries instead of repeating known-bad or known-good work
-- Set per-song time budgets to prevent stalling
-- Track source health during runs and degrade only when a source is clearly unhealthy
-- Prefer `downloaded`, then `page_found`, then strong fallback matches instead of immediate `not_found`
-- Rank results in tiers so mediocre page hits do not beat plausible downloadable matches
-- Split each song into a short phase A and a selective phase B instead of sending every track through maximum effort
+- **Try native source search paths first**: Internet Archive API, direct source searches where available
+- **Controlled query variants**: Generate 5–8 query variants instead of one brittle search string
+- **Adaptive caching**: Reuse run-level memory of failed/successful queries to avoid repeated work
+- **Per-song time budgets**: Prevent one difficult song from freezing the entire playlist
+- **Source health tracking**: Track timeouts, blocks, and errors; degrade unhealthy sources automatically
+- **Smart result ranking**: Prefer downloadable matches over page-only matches, strong matches over weak ones
+- **Staged search**: Fast high-value pass first (phase A), then selective recall expansion (phase B) only when needed
 
 ### Result tiers
 
-- **Tier 1**: strong downloadable result
-- **Tier 2**: strong legal page match
-- **Tier 3**: weak fallback page
-- **Tier 4**: low-confidence / not found
+**legal-music** ranks matches in tiers to avoid false positives:
 
-The engine prefers higher-value tiers first, so a medium Bandcamp page no longer beats a plausible downloadable candidate from a stronger source.
+- **Tier 1**: Direct download available
+- **Tier 2**: Legal page found (e.g., Bandcamp page without direct link)
+- **Tier 3**: Weak fallback match
+- **Tier 4**: No match found
+
+The engine prefers higher tiers first, so a downloaded track always beats a page-only match.
 
 ---
 
 ## Install
 
-### Quick install (pipx)
+### Quick start with pipx (recommended for end users)
 
 ```bash
-pipx install .
+pipx install legal-music
 legal-music init
 ```
 
-### Development
+### Development (from source)
 
 ```bash
+git clone https://github.com/your-org/legal-music.git
+cd legal-music
 pip install -e ".[dev]"
 ```
 
 ### Upgrade
 
 ```bash
-pipx install --force .
+pipx upgrade legal-music
 ```
 
 ---
@@ -64,21 +75,26 @@ pipx install --force .
 ## Quick start
 
 ```bash
-# 1. Initialize
+# 1. Initialize (creates config and playlist directory)
 legal-music init
 
-# 2. Create playlist
+# 2. Create a playlist
 cat > ~/.local/share/legal-music/playlists/my_songs.txt << 'EOF'
+# Comments start with #
 Beethoven - Moonlight Sonata
 Bach - Prelude in C Major
 Chopin - Nocturne Op. 9 No. 2
 EOF
 
-# 3. Check what's available (dry-run)
+# 3. Check what's available (dry-run, no download)
 legal-music dry ~/.local/share/legal-music/playlists/my_songs.txt
 
-# 4. Download when ready
+# 4. Download when results look good
 legal-music dl ~/.local/share/legal-music/playlists/my_songs.txt
+
+# 5. Check the results
+cat output/my_songs/report.csv
+ls -la output/my_songs/downloads/
 ```
 
 ---
@@ -116,31 +132,47 @@ legal-music dl ~/.local/share/legal-music/playlists/my_songs.txt
 Plain text, one song per line:
 
 ```
-# Comments start with #
-Beethoven - Moonlight Sonata
-Bach - Prelude in C Major
+# Comments start with # and are ignored
+# Format: Artist Name - Song Title
 Artist - Song Title
+Another Artist - Another Song
+
+# Blank lines are ignored
+Composer - Piece Name
 ```
 
-Lines starting with `#` are ignored. Duplicates are detected automatically.
+**Notes**:
+- Lines starting with `#` are ignored as comments
+- Blank lines are ignored
+- Duplicates are detected and skipped automatically
 
 ---
 
-## Output
+## Output and reports
 
-Each playlist run creates:
+Each playlist run creates an `output/<playlist_name>/` directory:
 
 ```
-output/<name>/
-  report.csv          # Status, source, score for each song
-  report.xlsx         # Color-coded Excel report (if openpyxl installed)
-  summary.json        # Source latency/usefulness and query-usefulness summary
-  duplicates.csv      # Skipped duplicates
-  errors.log          # Errors encountered
-  downloads/          # Audio files (not in dry-run mode)
+output/my_songs/
+  report.csv           # Song status, source, score (easy to audit)
+  report.xlsx          # Color-coded Excel version (if openpyxl installed)
+  summary.json         # Source stats and timing
+  duplicates.csv       # Skipped duplicate entries
+  errors.log           # Errors encountered during run
+  downloads/           # Audio files (download mode only)
 ```
 
-Default runs use one compact result line per song, while `--verbose` shows query, tier, and runtime detail. The end-of-run summary also prints total elapsed time and average time per song so speed is easy to judge in real use.
+**Report columns** (CSV/XLSX):
+- `Song`: The searched query
+- `Status`: `downloaded`, `page_found`, `not_found`, or `error`
+- `Source`: Which source found it
+- `Score`: Confidence score (0.0–1.0)
+- `URL`: Link to the result (or empty for `not_found`)
+
+**Summary stats**:
+- Source latency and success rate
+- Query effectiveness
+- Total runtime and average time per song
 
 ---
 
@@ -150,15 +182,16 @@ Generated at `~/.config/legal-music/config.json`:
 
 ```json
 {
+  "source_preset": "balanced",
   "delay": 0.25,
   "max_results": 5,
   "timeout": 10,
   "retry_count": 1,
   "per_song_timeout": 16,
-  "phase_a_budget_ratio": 0.82,
+  "phase_a_budget_ratio": 0.70,
   "min_downloadable_score": 0.46,
-  "min_page_score": 0.48,
-  "min_best_seen_score": 0.42,
+  "min_page_score": 0.50,
+  "min_best_seen_score": 0.50,
   "balanced_query_variants": 5,
   "maximize_query_variants": 8,
   "cache_enabled": true,
@@ -178,48 +211,39 @@ Generated at `~/.config/legal-music/config.json`:
 
 ### Settings explained
 
-- **delay**: Seconds between requests (increase if getting rate-limited)
-- **max_results**: Max results per source per query
-- **timeout**: HTTP request timeout (fail fast if too low, too slow if too high)
-- **retry_count**: Retries on connection errors (0 = fail fast)
-- **per_song_timeout**: Max seconds to spend searching one song (prevents stalling)
-- **phase_a_budget_ratio**: Fraction of the song budget reserved for the fast high-value pass before fallback expansion
-- **min_downloadable_score**: Score threshold for direct download status
-- **min_page_score**: Score threshold for "page found" status
-- **min_best_seen_score**: Threshold for rescuing a strong candidate via fallback
-- **balanced_query_variants / maximize_query_variants**: Query breadth for the two main search profiles
-- **cache_enabled / persistent_cache_enabled**: Reuse previous query and inspect work instead of repeating it
-- **source_priority**: Default source order before adaptive runtime reordering
-- **sources[].max_variants**: Per-source cap on query variants before adaptive demotion kicks in
+| Setting | Default | Purpose |
+|---------|---------|---------|
+| `delay` | 0.25s | Pause between requests (increase if rate-limited) |
+| `max_results` | 5 | Results per source per query |
+| `timeout` | 10s | HTTP request timeout |
+| `per_song_timeout` | 16s | Max time to search one song (balanced mode) |
+| `phase_a_budget_ratio` | 0.70 | Fraction of budget reserved for fast high-value pass |
+| `min_downloadable_score` | 0.46 | Threshold for "download available" status |
+| `min_page_score` | 0.50 | Threshold for "page found" status |
+| `cache_enabled` | true | Reuse query results within a run |
+| `persistent_cache_enabled` | false | Reuse results across runs |
+| `source_preset` | balanced | Source profile: `balanced`, `maximize`, or `custom` |
 
-### Practical tuning
+**source_preset values**:
+- `balanced`: Internet Archive + Free Music Archive + Bandcamp (fast, practical)
+- `maximize`: All sources enabled (more thorough, slower)
+- `custom`: Use current source enable/disable settings
 
-If playlists are too slow:
+**Tuning for conditions**:
+
+*Slow networks*:
 ```json
-{
-  "delay": 0.15,
-  "max_results": 2,
-  "timeout": 5,
-  "per_song_timeout": 8
-}
+{"delay": 2.0, "timeout": 20, "retry_count": 1}
 ```
 
-If you want more recall:
+*More recall needed*:
 ```json
-{
-  "max_results": 7,
-  "per_song_timeout": 24,
-  "maximize_query_variants": 8
-}
+{"max_results": 7, "per_song_timeout": 24, "maximize_query_variants": 8}
 ```
 
-If getting rate-limited:
+*Rate-limited*:
 ```json
-{
-  "delay": 2.0,
-  "timeout": 20,
-  "retry_count": 1
-}
+{"delay": 2.0, "timeout": 20}
 ```
 
 ---
@@ -360,16 +384,18 @@ legal-music batch-dry --fast ~/playlists/
 
 ## Troubleshooting
 
-### "Tool feels slow / hangs on a song"
+### "Tool appears to hang or is slow on a song"
 
-The tool respects per-song time budgets. If it appears stuck:
-- Use `--fast` mode
-- Check `legal-music doctor` to see if any sources are unhealthy
+The tool respects per-song time budgets to prevent stalling. If a song takes a long time:
+
+- Use `--fast` mode for quicker searches
+- Check source health with `legal-music doctor`
 - Use `-v` to see what sources are being tried
+- Increase `delay` if getting rate-limited
 
 ### "Getting 403/429 rate-limit errors"
 
-Solution: Increase `delay` in config or on command line:
+Increase the delay between requests:
 
 ```bash
 legal-music dl --delay 2.0 my_songs.txt
@@ -378,81 +404,154 @@ legal-music dl --delay 2.0 my_songs.txt
 Or edit `~/.config/legal-music/config.json`:
 
 ```json
-{
-  "delay": 2.0
-}
+{"delay": 2.0}
 ```
 
-### "Internet Archive is down"
+### "Internet Archive is temporarily down"
 
-The tool will gracefully degrade and try other sources. Check:
+The tool gracefully degrades to other sources. Check:
 
 ```bash
 legal-music doctor
 ```
 
-If Internet Archive API fails but other sources work, they'll be prioritized in the current run.
+If Internet Archive API fails, other sources will be prioritized automatically for the current run.
 
 ### "No results found for any song"
 
-Possible reasons:
-1. All sources are unavailable → check `legal-music doctor`
-2. Songs don't exist on legal sources → check titles are correct
-3. Network is blocking requests → try from a different network
-4. DuckDuckGo is unavailable → native source search still runs, but recall may still drop on sources that need fallback
+Possible causes:
 
-### "openpyxl not found"
+1. **All sources are down** → Run `legal-music doctor` to check connectivity
+2. **Song titles are incorrect** → Verify artist and title spelling
+3. **Legal sources don't have the song** → Legal catalogs have limited commercial coverage
+4. **Network is blocking requests** → Try from a different network
+5. **DuckDuckGo is unavailable** → Some fallback queries may fail, but native source searches still run
 
-XLSX reports won't be generated. Install:
+### "openpyxl not found / No XLSX report generated"
+
+XLSX reports require the optional `openpyxl` library. Install it:
 
 ```bash
 pip install openpyxl
 ```
 
+CSV reports will still be generated.
+
 ---
 
 ## Development
 
-```bash
-# Install dev dependencies
-pip install -e ".[dev]"
+### Setup
 
-# Run tests
+```bash
+# Clone and enter the repository
+git clone https://github.com/your-org/legal-music.git
+cd legal-music
+
+# Install in editable mode with dev tools
+pip install -e ".[dev]"
+```
+
+### Run tests and linting
+
+```bash
+# Run all tests
 pytest
 
-# Lint
+# Run linter
 ruff check .
 
-# Build
+# Format code (safe, non-breaking)
+ruff format .
+
+# Full check (lint + test)
+make check
+
+# Build package
 python3 -m build --no-isolation
+```
+
+### Make commands
+
+```bash
+make help       # Show all available commands
+make dev        # Install dev dependencies
+make test       # Run pytest
+make lint       # Run ruff check
+make format     # Format code with ruff
+make check      # Lint + test
+make build      # Build sdist + wheel
+```
+
+### Project structure
+
+```
+legal-music/
+  src/legal_music/
+    __init__.py         # Package init
+    cli.py              # CLI entry point
+    config.py           # Configuration handling
+    downloader.py       # Download logic
+    models.py           # Data models
+    playlist.py         # Playlist parsing
+    reports.py          # Report generation
+    search/
+      __init__.py
+      engine.py         # Main search engine
+      query.py          # Query generation
+      scoring.py        # Result scoring
+      sources/          # Individual source implementations
+        archive.py
+        bandcamp.py
+        fma.py
+        jamendo.py
+        pixabay.py
+  tests/
+    test_*.py           # Test modules
+  README.md             # This file
+  pyproject.toml        # Package metadata
+  pytest.ini            # Test configuration
+  ruff.toml             # Linter configuration
 ```
 
 ---
 
 ## Known limitations
 
-- **Bandcamp**: Some pages don't offer direct downloads (status: page_found requires manual check)
-- **Free Music Archive**: Search result markup can change and some artist pages are stronger than track pages
-- **Jamendo**: Search result markup can change, and some downloads may require account interaction
-- **Pixabay**: Similar to Jamendo; direct page structure may change and some downloads may require account interaction
-- **Coverage**: Legal/open sources simply do not have full commercial-catalog coverage
-- **Adaptive learning**: Runtime learning improves a run and optional cache reuse helps later runs, but neither can create coverage that legal catalogs do not have
-- **Scoring**: Matching is much stronger now but still heuristic-based, especially on sparse page titles
+- **Source coverage**: Legal and open sources have limited commercial music coverage (especially recent, major-label releases)
+- **Bandcamp pages**: Some artists don't offer direct downloads; you'll get a `page_found` status that requires manual checking
+- **Free Music Archive**: Search result markup can change; some artist pages yield better results than individual track pages
+- **Jamendo & Pixabay**: Markup can change; some downloads may require account interaction
+- **Fallback search**: If DuckDuckGo is unavailable, fallback queries won't run, but native source search still works
+- **Heuristic matching**: Result matching is strong but still heuristic-based; some false positives/negatives are possible on sparse or unusual titles
+
+**Bottom line**: legal-music is best suited for:
+- Classical and pre-1950s music (strong public domain coverage)
+- Independent and CC-licensed music
+- Bandcamp artists with free downloads
+- Music that exists on legal, open sources
+
+It's not suitable for:
+- Recent major-label commercial releases (not on legal, open sources)
+- Piracy or bypassing DRM
+- Unauthorized streaming download
 
 ---
 
 ## License
 
-MIT — see LICENSE
+MIT — See [LICENSE](LICENSE) for details.
 
 ---
 
 ## Philosophy
 
-This tool is designed for **real-world use**:
+**legal-music** is built on these principles:
 
-- **Recall-oriented, still bounded**: More valid hits without letting one song freeze a playlist
-- **Adaptive, not static**: Search order and query order change when the run proves a strategy is weak or strong
-- **Resilient, not fragile**: One bad source doesn't break the whole run
-- **Practical, not theoretical**: Actually useful defaults
-- **Legal-only**: Never tries unauthorized sources
+- **Legal-first**: Never tries unauthorized sources; legal sources only
+- **Practical**: Real-world defaults that work without tuning
+- **Adaptive**: Runtime behavior adjusts to source health and effectiveness
+- **Resilient**: One failing source doesn't break the entire playlist
+- **Transparent**: Reports show exactly what was found and where
+- **Bounded**: Per-song time limits prevent stalling
+- **Honest**: Limited coverage on legal sources, but no false promises

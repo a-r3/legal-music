@@ -1,5 +1,7 @@
 """CLI smoke tests."""
 
+import json
+
 import pytest
 
 from legal_music.cli import build_parser, main
@@ -42,6 +44,36 @@ class TestCliInit:
         rc = main(["init", "--config", str(cfg_path)])
         assert rc == 0
         assert cfg_path.exists()
+
+    def test_src_preset_balanced_repairs_legacy_config(self, tmp_path):
+        cfg_path = tmp_path / "config.json"
+        cfg_path.write_text(
+            json.dumps(
+                {
+                    "sources": [
+                        {"name": "Internet Archive", "enabled": True},
+                        {"name": "Bandcamp", "enabled": True},
+                        {"name": "Jamendo", "enabled": True},
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        rc = main(["src", "preset", "balanced", "--config", str(cfg_path), "--no-color"])
+
+        assert rc == 0
+        data = json.loads(cfg_path.read_text(encoding="utf-8"))
+        assert data["source_preset"] == "balanced"
+        assert [source["name"] for source in data["sources"]] == [
+            "Internet Archive",
+            "Free Music Archive",
+            "Bandcamp",
+            "Jamendo",
+            "Pixabay Music",
+        ]
+        enabled = [source["name"] for source in data["sources"] if source["enabled"]]
+        assert enabled == ["Internet Archive", "Free Music Archive", "Bandcamp"]
 
 
 class TestCliStats:

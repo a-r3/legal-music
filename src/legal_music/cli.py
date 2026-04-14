@@ -427,7 +427,7 @@ def cmd_cfg(args: argparse.Namespace) -> int:
         p.warn(f"No config found at {cfg_path}. Using defaults.")
         cfg = AppConfig()
     else:
-        cfg = AppConfig.load(cfg_path)
+        cfg = _load_config(cfg_path)
 
     p.bold(f"Config: {cfg_path}")
     print(json.dumps(cfg.to_dict(), indent=2, ensure_ascii=False))
@@ -436,7 +436,7 @@ def cmd_cfg(args: argparse.Namespace) -> int:
 
 def cmd_src(args: argparse.Namespace) -> int:
     cfg_path = Path(args.config)
-    cfg = AppConfig.load(cfg_path) if cfg_path.exists() else AppConfig()
+    cfg = _load_config(cfg_path) if cfg_path.exists() else AppConfig()
     p = Printer(color=not getattr(args, "no_color", False))
 
     action = getattr(args, "src_action", None)
@@ -445,6 +445,7 @@ def cmd_src(args: argparse.Namespace) -> int:
     if action is None:
         # List sources with preset reference
         p.bold("Sources:")
+        p.info(f"  preset: {cfg.source_preset}")
         for s in cfg.sources:
             marker = "+" if s.enabled else "-"
             p.info(f"  [{marker}] {s.name}")
@@ -465,6 +466,7 @@ def cmd_src(args: argparse.Namespace) -> int:
             p.err(f"Unknown source: {name!r}")
             p.info(f"Known sources: {', '.join(ALL_SOURCE_NAMES)}")
             return 1
+        cfg.source_preset = "custom"
         was_enabled = src.enabled
         src.enabled = True
         cfg.save(cfg_path)
@@ -481,6 +483,7 @@ def cmd_src(args: argparse.Namespace) -> int:
             p.err(f"Unknown source: {name!r}")
             p.info(f"Known sources: {', '.join(ALL_SOURCE_NAMES)}")
             return 1
+        cfg.source_preset = "custom"
         was_enabled = src.enabled
         src.enabled = False
         cfg.save(cfg_path)
@@ -501,6 +504,7 @@ def cmd_src(args: argparse.Namespace) -> int:
             return 1
         cfg.save(cfg_path)
         p.bold(f"Preset applied: {name}")
+        p.info(f"  preset: {cfg.source_preset}")
         for src in cfg.sources:
             marker = "+" if src.enabled else "-"
             p.info(f"  [{marker}] {src.name}")
@@ -514,7 +518,7 @@ def cmd_src(args: argparse.Namespace) -> int:
 def cmd_dry(args: argparse.Namespace) -> int:
     playlist_path = Path(args.playlist)
     cfg_path = Path(args.config)
-    cfg = AppConfig.load(cfg_path) if cfg_path.exists() else AppConfig()
+    cfg = _load_config(cfg_path) if cfg_path.exists() else AppConfig()
 
     _apply_cfg_overrides(cfg, args)
 
@@ -540,7 +544,7 @@ def cmd_dry(args: argparse.Namespace) -> int:
 def cmd_dl(args: argparse.Namespace) -> int:
     playlist_path = Path(args.playlist)
     cfg_path = Path(args.config)
-    cfg = AppConfig.load(cfg_path) if cfg_path.exists() else AppConfig()
+    cfg = _load_config(cfg_path) if cfg_path.exists() else AppConfig()
 
     _apply_cfg_overrides(cfg, args)
 
@@ -575,7 +579,7 @@ def _batch_run(args: argparse.Namespace, dry_run: bool) -> int:
     batch_started = time.time()
     playlist_dir = Path(args.playlist_dir)
     cfg_path = Path(args.config)
-    cfg = AppConfig.load(cfg_path) if cfg_path.exists() else AppConfig()
+    cfg = _load_config(cfg_path) if cfg_path.exists() else AppConfig()
 
     _apply_cfg_overrides(cfg, args)
 
@@ -695,6 +699,16 @@ def _resolve_output_dir(args: argparse.Namespace, cfg: AppConfig, playlist_path:
     if hasattr(args, "output") and args.output:
         return Path(args.output)
     return cfg.output_dir / playlist_path.stem
+
+
+def _load_config(cfg_path: Path) -> AppConfig:
+    cfg = AppConfig.load(cfg_path)
+    if getattr(cfg, "_migration_applied", False):
+        try:
+            cfg.save(cfg_path)
+        except OSError:
+            pass
+    return cfg
 
 
 def _compact_song(song: str, width: int = 46) -> str:

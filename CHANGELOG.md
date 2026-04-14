@@ -1,6 +1,41 @@
 # Changelog
 
-## 2.1.0 — Practical Real-World Optimization
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [2.2.0] — Phase 3 completion
+
+### ✨ Features
+- **Query variant management**: Better query generation and variant selection
+- **Balanced vs Maximize modes**: `--maximize` for better recall, balanced as default
+- **Smart source presets**: `balanced` (IA+FMA+Bandcamp), `maximize` (all sources), `fast` (IA only)
+- **Report generation**: CSV and optional XLSX (color-coded) reports with source and score
+- **Source management**: `legal-music src` command to list, enable, disable, or switch presets
+
+### 🔧 Improvements
+- Config/preset mismatch handling: Properly manage enable/disable state across preset changes
+- Per-song timeout budgets: Prevent stalling on difficult songs
+- Source health tracking: Adaptive degradation of unhealthy sources during runs
+- Better scoring and ranking: Tier-based result ranking (download > page > fallback)
+- Clearer CLI help text: All subcommands have detailed, consistent help
+
+### 📦 Packaging & docs
+- Professional README with complete usage guide
+- Development setup documentation
+- CI/CD workflows for testing and release
+- Clear legal boundary statements
+- Example playlists and configuration
+
+### ⚙️ Technical
+- All 51+ tests passing
+- Linting 100% clean (ruff)
+- Successful build and packaging
+- Python 3.10, 3.11, 3.12 support
+
+---
+
+## [2.1.0] — Practical Real-World Optimization
 
 ### Architecture
 - **Source health tracking**: Tracks timeouts, blocks, and errors per source during runs

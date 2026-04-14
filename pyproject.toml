@@ -5,14 +5,14 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "legal-music"
 version = "2.2.0"
-description = "CLI to find and download music from legal, permitted sources"
+description = "Professional CLI to find and download music from legal, permitted sources"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.10"
 authors = [
   {name = "legal-music contributors"}
 ]
-keywords = ["music", "download", "bandcamp", "archive", "jamendo", "legal"]
+keywords = ["music", "download", "bandcamp", "archive", "jamendo", "legal", "cli"]
 classifiers = [
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.10",
@@ -22,6 +22,10 @@ classifiers = [
   "Operating System :: OS Independent",
   "Environment :: Console",
   "Topic :: Multimedia :: Sound/Audio",
+  "Topic :: Internet",
+  "Intended Audience :: End Users/Desktop",
+  "Development Status :: 4 - Beta",
+  "Natural Language :: English",
 ]
 dependencies = [
   "requests>=2.31.0",
@@ -40,8 +44,11 @@ dev = [
 legal-music = "legal_music.cli:main"
 
 [project.urls]
-"Source" = "https://github.com/your-org/legal-music"
+Homepage = "https://github.com/your-org/legal-music"
+Documentation = "https://github.com/your-org/legal-music#readme"
+Repository = "https://github.com/your-org/legal-music.git"
 "Bug Tracker" = "https://github.com/your-org/legal-music/issues"
+Changelog = "https://github.com/your-org/legal-music/blob/main/CHANGELOG.md"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

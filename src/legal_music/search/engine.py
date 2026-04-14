@@ -34,8 +34,9 @@ _SOURCE_REGISTRY: dict[str, type[SourceAdapter]] = {
 _SOURCE_QUERY_ORDER: dict[str, list[str]] = {
     "Internet Archive": [
         "artist_title",
-        "artist_title_quoted",
         "title_quoted",
+        "artist_title_quoted",
+        "raw_quoted",
         "title_core",
         "title_only",
         "artist_title_core",
@@ -52,10 +53,10 @@ _SOURCE_QUERY_ORDER: dict[str, list[str]] = {
     ],
     "Free Music Archive": [
         "artist_title",
-        "artist_title_quoted",
         "title_quoted",
-        "title_core",
         "title_only",
+        "artist_title_quoted",
+        "title_core",
         "artist_title_core",
         "normalized_full",
     ],
@@ -75,8 +76,12 @@ _SOURCE_QUERY_ORDER: dict[str, list[str]] = {
     ],
 }
 
-_DOWNLOAD_FIRST_SOURCES = {"Internet Archive", "Free Music Archive", "Jamendo"}
-_PAGE_HEAVY_SOURCES = {"Bandcamp"}
+_PRIMARY_SOURCES = {"Internet Archive"}
+_SECONDARY_SOURCES = {"Free Music Archive"}
+_SELECTIVE_FALLBACK_SOURCES = {"Bandcamp"}
+_OPT_IN_SOURCES = {"Jamendo", "Pixabay Music"}
+_DOWNLOAD_FIRST_SOURCES = _PRIMARY_SOURCES | _SECONDARY_SOURCES | {"Jamendo"}
+_PAGE_HEAVY_SOURCES = _SELECTIVE_FALLBACK_SOURCES
 
 
 def build_session(cfg: AppConfig) -> requests.Session:
@@ -88,8 +93,8 @@ def build_session(cfg: AppConfig) -> requests.Session:
 def build_sources(cfg: AppConfig, session: requests.Session) -> list[SourceAdapter]:
     """Build enabled sources in configured priority order."""
     sources: list[SourceAdapter] = []
-    ordered = cfg.source_priority or [src.name for src in cfg.sources]
-    enabled_map = {src.name: src for src in cfg.sources if src.enabled}
+    ordered = cfg.effective_source_priority()
+    enabled_map = {src.name: src for src in cfg.effective_source_configs()}
 
     for src_name in ordered:
         src_cfg = enabled_map.get(src_name)
@@ -107,7 +112,7 @@ def build_sources(cfg: AppConfig, session: requests.Session) -> list[SourceAdapt
             )
         )
     configured = {source.name for source in sources}
-    for src_cfg in cfg.sources:
+    for src_cfg in cfg.effective_source_configs():
         if not src_cfg.enabled or src_cfg.name in configured:
             continue
         cls = _SOURCE_REGISTRY.get(src_cfg.name)
@@ -278,6 +283,16 @@ class SearchEngine:
         for source in self._ordered_sources(profile, phase_name):
             if self._budget_exceeded(song_start) or self._phase_budget_exceeded(song_start, phase_budget):
                 break
+            if not self._should_try_source(
+                source.name,
+                phase_name=phase_name,
+                profile=profile,
+                song_start=song_start,
+                best_downloadable=best_downloadable,
+                best_page=best_page,
+                best_seen=best_seen,
+            ):
+                continue
             if self.run_context.should_skip_source(source.name):
                 health = self.run_context.get_source_health(source.name)
                 self.printer.vlog(f"skip {source.name} [{health.value}]")
@@ -300,6 +315,8 @@ class SearchEngine:
                 seen_queries_by_source[source.name].add(variant.query.casefold())
 
                 urls = self._search_source(source, song, variant)
+                if source.name in _PAGE_HEAVY_SOURCES and not self.cfg.maximize_mode:
+                    urls = urls[:1]
                 if not urls:
                     continue
 
@@ -368,7 +385,7 @@ class SearchEngine:
         }
 
     def _ordered_sources(self, profile: SongProfile, phase_name: str) -> list[SourceAdapter]:
-        base_order = {name: index for index, name in enumerate(self.cfg.source_priority)}
+        base_order = {name: index for index, name in enumerate(self.cfg.effective_source_priority())}
 
         def key(source: SourceAdapter) -> tuple[float, float, float]:
             metrics = self.run_context.sources.get(source.name)
@@ -392,6 +409,76 @@ class SearchEngine:
         if phase_name == "phase_a":
             return [source for source in ordered if source.name in _DOWNLOAD_FIRST_SOURCES or self._source_has_download_value(source.name)]
         return ordered
+
+    def _should_try_source(
+        self,
+        source_name: str,
+        *,
+        phase_name: str,
+        profile: SongProfile,
+        song_start: float,
+        best_downloadable: SearchResult | None,
+        best_page: SearchResult | None,
+        best_seen: SearchResult | None,
+    ) -> bool:
+        if self.cfg.fast_mode:
+            return source_name in _PRIMARY_SOURCES
+
+        if not self.cfg.maximize_mode:
+            if source_name in _OPT_IN_SOURCES:
+                return False
+            if phase_name == "phase_a":
+                return source_name in (_PRIMARY_SOURCES | _SECONDARY_SOURCES)
+            if source_name in _SELECTIVE_FALLBACK_SOURCES:
+                return self._should_try_bandcamp(
+                    profile=profile,
+                    song_start=song_start,
+                    best_downloadable=best_downloadable,
+                    best_page=best_page,
+                    best_seen=best_seen,
+                )
+            return source_name in (_PRIMARY_SOURCES | _SECONDARY_SOURCES)
+
+        if phase_name == "phase_a" and source_name in _PAGE_HEAVY_SOURCES:
+            return False
+        return True
+
+    def _should_try_bandcamp(
+        self,
+        *,
+        profile: SongProfile,
+        song_start: float,
+        best_downloadable: SearchResult | None,
+        best_page: SearchResult | None,
+        best_seen: SearchResult | None,
+    ) -> bool:
+        if self.cfg.maximize_mode:
+            return True
+        if best_downloadable is not None:
+            return False
+
+        time_remaining = self.cfg.per_song_timeout - (time.time() - song_start)
+        if time_remaining < max(4.0, self.cfg.per_song_timeout * 0.22):
+            return False
+
+        metric = self.run_context.sources.get("Bandcamp")
+        if metric and metric.page_found_count >= 2 and metric.downloaded_count == 0 and metric.low_value_page_ratio >= 0.75:
+            return False
+
+        if best_page and best_page.source in (_PRIMARY_SOURCES | _SECONDARY_SOURCES):
+            return False
+
+        if best_seen and best_seen.source in (_PRIMARY_SOURCES | _SECONDARY_SOURCES):
+            if best_seen.score >= max(self.cfg.min_best_seen_score + 0.08, 0.58):
+                return False
+
+        if profile.is_classical or profile.is_instrumental or profile.is_soundtrack or profile.is_electronic:
+            return True
+        if profile.has_accents or profile.has_non_ascii:
+            return True
+        if best_seen is None:
+            return time_remaining >= max(6.0, self.cfg.per_song_timeout * 0.35)
+        return True
 
     def _source_profile_bias(self, source_name: str, profile: SongProfile) -> float:
         bias = 0.0
@@ -434,14 +521,26 @@ class SearchEngine:
         if self.cfg.maximize_mode and profile.is_classical:
             limit = min(len(variants), limit + 1)
         if source_name in _PAGE_HEAVY_SOURCES and not self.cfg.maximize_mode:
-            limit = min(limit, 4)
+            limit = min(limit, 2)
         if phase_name == "phase_a":
-            limit = min(limit, 2 if source_name in _DOWNLOAD_FIRST_SOURCES else 1)
+            if self.cfg.maximize_mode:
+                limit = min(limit, 2 if source_name in _DOWNLOAD_FIRST_SOURCES else 1)
+            elif source_name == "Internet Archive":
+                limit = min(limit, 3)
+            elif source_name == "Free Music Archive":
+                limit = min(limit, 2)
+            else:
+                limit = min(limit, 1)
         else:
             if not self.cfg.maximize_mode:
-                limit = min(limit, 2)
+                if source_name == "Internet Archive":
+                    limit = min(limit, 4)
+                elif source_name == "Free Music Archive":
+                    limit = min(limit, 3)
+                else:
+                    limit = min(limit, 2)
             if source_name in _PAGE_HEAVY_SOURCES:
-                limit = min(limit, 2)
+                limit = min(limit, 1 if not self.cfg.maximize_mode else 2)
 
         ordered_kinds = _SOURCE_QUERY_ORDER.get(source_name, [])
         ranking = {kind: index for index, kind in enumerate(ordered_kinds)}
@@ -634,6 +733,13 @@ class SearchEngine:
 
     def _good_enough_best_seen(self, result: SearchResult) -> bool:
         if result.result_tier == ResultTier.TIER_3_WEAK_PAGE:
+            if (
+                not self.cfg.maximize_mode
+                and result.source == "Bandcamp"
+                and result.score >= 0.70
+                and result.matched_query_kind in {"artist_title", "artist_title_quoted", "title_quoted", "title_only"}
+            ):
+                return True
             return False
         return result.score >= self.cfg.min_best_seen_score
 

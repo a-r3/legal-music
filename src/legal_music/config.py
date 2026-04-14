@@ -11,6 +11,7 @@ from .constants import (
     DEFAULT_DEGRADED_AFTER_TIMEOUTS,
     DEFAULT_EARLY_EXIT_SCORE,
     DEFAULT_FALLBACK_POLICY,
+    DEFAULT_PER_SONG_TIMEOUT,
     DEFAULT_QUERY_VARIANTS,
     DEFAULT_UNHEALTHY_AFTER_TIMEOUTS,
     FAST_QUERY_VARIANTS,
@@ -21,6 +22,13 @@ from .utils import default_data_dir, default_output_dir, default_playlists_dir
 # ---------------------------------------------------------------------------
 # Source presets
 # ---------------------------------------------------------------------------
+
+CONFIG_VERSION = 4
+DEFAULT_SOURCE_PRESET = "balanced"
+CUSTOM_SOURCE_PRESET = "custom"
+LEGACY_PHASE_A_BUDGET_RATIO = 0.78
+LEGACY_MIN_PAGE_SCORE = 0.52
+LEGACY_MIN_BEST_SEEN_SCORE = 0.55
 
 ALL_SOURCE_NAMES: list[str] = [
     "Internet Archive",
@@ -37,6 +45,27 @@ SOURCE_PRESETS: dict[str, list[str]] = {
 }
 
 
+def _default_source_priority() -> list[str]:
+    return list(ALL_SOURCE_NAMES)
+
+
+def _default_sources() -> list[SourceConfig]:
+    return [
+        SourceConfig("Internet Archive"),
+        SourceConfig("Free Music Archive"),
+        SourceConfig("Bandcamp"),
+        SourceConfig("Jamendo", enabled=False),
+        SourceConfig("Pixabay Music", enabled=False),
+    ]
+
+
+def _infer_preset_from_enabled(enabled_names: set[str]) -> str | None:
+    for preset_name, preset_sources in SOURCE_PRESETS.items():
+        if enabled_names == set(preset_sources):
+            return preset_name
+    return None
+
+
 @dataclass
 class SourceConfig:
     name: str
@@ -48,6 +77,8 @@ class SourceConfig:
 
 @dataclass
 class AppConfig:
+    config_version: int = CONFIG_VERSION
+
     # Directories
     playlists_dir: Path = field(default_factory=default_playlists_dir)
     output_dir: Path = field(default_factory=default_output_dir)
@@ -59,19 +90,18 @@ class AppConfig:
     timeout: int = 10
     retry_count: int = 1
     backoff: float = 1.0
-    per_song_timeout: int = 15
-    phase_a_budget_ratio: float = 0.65
+    per_song_timeout: int = 16
+    phase_a_budget_ratio: float = 0.70
 
     # Scoring
     min_downloadable_score: float = 0.46
-    min_page_score: float = 0.48
-    min_best_seen_score: float = 0.42
+    min_page_score: float = 0.50
+    min_best_seen_score: float = 0.50
     early_exit_score: float = DEFAULT_EARLY_EXIT_SCORE
 
     # Runtime behavior
     fast_mode: bool = False
     maximize_mode: bool = False
-    reduce_variants: bool = False
     balanced_query_variants: int = DEFAULT_QUERY_VARIANTS
     fast_query_variants: int = FAST_QUERY_VARIANTS
     maximize_query_variants: int = MAXIMIZE_QUERY_VARIANTS
@@ -88,36 +118,44 @@ class AppConfig:
     blocked_after_failures: int = DEFAULT_BLOCKED_AFTER_FAILURES
 
     # Source priority
-    source_priority: list[str] = field(
-        default_factory=lambda: [
-            "Internet Archive",
-            "Free Music Archive",
-            "Bandcamp",
-            "Jamendo",
-            "Pixabay Music",
-        ]
-    )
+    source_preset: str = DEFAULT_SOURCE_PRESET
+    source_priority: list[str] = field(default_factory=_default_source_priority)
 
     # Sources (ordered by priority)
-    sources: list[SourceConfig] = field(
-        default_factory=lambda: [
-            SourceConfig("Internet Archive"),
-            SourceConfig("Free Music Archive"),
-            SourceConfig("Bandcamp"),
-            SourceConfig("Jamendo", enabled=False),
-            SourceConfig("Pixabay Music", enabled=False),
-        ]
-    )
+    sources: list[SourceConfig] = field(default_factory=_default_sources)
 
     # Reports
     csv_report: bool = True
     xlsx_report: bool = True
+    _migration_applied: bool = field(default=False, init=False, repr=False, compare=False)
+
+    def configured_source_names(self) -> list[str]:
+        if self.source_preset in SOURCE_PRESETS:
+            return list(SOURCE_PRESETS[self.source_preset])
+        return [s.name for s in self.sources if s.enabled]
 
     def enabled_source_names(self) -> list[str]:
-        return [s.name for s in self.sources if s.enabled]
+        if self.fast_mode:
+            return list(SOURCE_PRESETS["fast"])
+        if self.maximize_mode:
+            return list(SOURCE_PRESETS["maximize"])
+        return self.configured_source_names()
+
+    def effective_source_priority(self) -> list[str]:
+        active = set(self.enabled_source_names())
+        ordered = [name for name in self.source_priority if name in active]
+        for name in ALL_SOURCE_NAMES:
+            if name in active and name not in ordered:
+                ordered.append(name)
+        return ordered
+
+    def effective_source_configs(self) -> list[SourceConfig]:
+        active = set(self.enabled_source_names())
+        return [source for source in self.sources if source.name in active]
 
     def to_dict(self, *, compact: bool = False) -> dict[str, Any]:
         data = {
+            "config_version": self.config_version,
             "playlists_dir": str(self.playlists_dir),
             "output_dir": str(self.output_dir),
             "logs_dir": str(self.logs_dir),
@@ -140,6 +178,7 @@ class AppConfig:
             "degraded_after_timeouts": self.degraded_after_timeouts,
             "unhealthy_after_timeouts": self.unhealthy_after_timeouts,
             "blocked_after_failures": self.blocked_after_failures,
+            "source_preset": self.source_preset,
             "source_priority": list(self.source_priority),
             "sources": [
                 {
@@ -159,7 +198,6 @@ class AppConfig:
                 {
                     "fast_mode": self.fast_mode,
                     "maximize_mode": self.maximize_mode,
-                    "reduce_variants": self.reduce_variants,
                     "fast_query_variants": self.fast_query_variants,
                     "fallback_policy": self.fallback_policy,
                     "adaptive_source_ordering": self.adaptive_source_ordering,
@@ -170,7 +208,7 @@ class AppConfig:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> AppConfig:
-        sources = [
+        raw_sources = [
             SourceConfig(
                 name=s["name"],
                 enabled=s.get("enabled", True),
@@ -179,8 +217,49 @@ class AppConfig:
                 min_page_score=s.get("min_page_score"),
             )
             for s in data.get("sources", [])
+            if s.get("name")
         ]
-        return cls(
+        loaded_version = int(data.get("config_version", 0))
+        source_names = {source.name for source in raw_sources}
+        complete_source_list = all(name in source_names for name in ALL_SOURCE_NAMES)
+        source_preset = str(data.get("source_preset", "")).strip().lower()
+        migration_applied = False
+
+        if not source_preset:
+            enabled_names = {source.name for source in raw_sources if source.enabled}
+            inferred = _infer_preset_from_enabled(enabled_names)
+            if complete_source_list:
+                source_preset = inferred or CUSTOM_SOURCE_PRESET
+            else:
+                source_preset = inferred or DEFAULT_SOURCE_PRESET
+                migration_applied = True
+
+        source_map = {source.name: source for source in raw_sources}
+        sources: list[SourceConfig] = []
+        for default in _default_sources():
+            source = source_map.get(default.name)
+            if source is None:
+                source = SourceConfig(
+                    name=default.name,
+                    enabled=default.enabled,
+                    max_variants=default.max_variants,
+                    min_downloadable_score=default.min_downloadable_score,
+                    min_page_score=default.min_page_score,
+                )
+                migration_applied = True
+            sources.append(source)
+
+        source_priority = []
+        for name in data.get("source_priority", _default_source_priority()):
+            if name in ALL_SOURCE_NAMES and name not in source_priority:
+                source_priority.append(name)
+        for name in ALL_SOURCE_NAMES:
+            if name not in source_priority:
+                source_priority.append(name)
+                migration_applied = True
+
+        cfg = cls(
+            config_version=int(data.get("config_version", CONFIG_VERSION)),
             playlists_dir=Path(data.get("playlists_dir", str(default_playlists_dir()))),
             output_dir=Path(data.get("output_dir", str(default_output_dir()))),
             logs_dir=Path(data.get("logs_dir", str(default_data_dir() / "logs"))),
@@ -189,15 +268,14 @@ class AppConfig:
             timeout=int(data.get("timeout", 10)),
             retry_count=int(data.get("retry_count", 1)),
             backoff=float(data.get("backoff", 1.0)),
-            per_song_timeout=int(data.get("per_song_timeout", 16)),
-            phase_a_budget_ratio=float(data.get("phase_a_budget_ratio", 0.82)),
+            per_song_timeout=int(data.get("per_song_timeout", DEFAULT_PER_SONG_TIMEOUT + 6)),
+            phase_a_budget_ratio=float(data.get("phase_a_budget_ratio", 0.70)),
             min_downloadable_score=float(data.get("min_downloadable_score", 0.46)),
-            min_page_score=float(data.get("min_page_score", 0.48)),
-            min_best_seen_score=float(data.get("min_best_seen_score", 0.42)),
+            min_page_score=float(data.get("min_page_score", 0.50)),
+            min_best_seen_score=float(data.get("min_best_seen_score", 0.50)),
             early_exit_score=float(data.get("early_exit_score", DEFAULT_EARLY_EXIT_SCORE)),
             fast_mode=bool(data.get("fast_mode", False)),
             maximize_mode=bool(data.get("maximize_mode", False)),
-            reduce_variants=bool(data.get("reduce_variants", False)),
             balanced_query_variants=int(data.get("balanced_query_variants", DEFAULT_QUERY_VARIANTS)),
             fast_query_variants=int(data.get("fast_query_variants", FAST_QUERY_VARIANTS)),
             maximize_query_variants=int(data.get("maximize_query_variants", MAXIMIZE_QUERY_VARIANTS)),
@@ -210,25 +288,72 @@ class AppConfig:
             degraded_after_timeouts=int(data.get("degraded_after_timeouts", DEFAULT_DEGRADED_AFTER_TIMEOUTS)),
             unhealthy_after_timeouts=int(data.get("unhealthy_after_timeouts", DEFAULT_UNHEALTHY_AFTER_TIMEOUTS)),
             blocked_after_failures=int(data.get("blocked_after_failures", DEFAULT_BLOCKED_AFTER_FAILURES)),
-            source_priority=list(
-                data.get(
-                    "source_priority",
-                    [
-                        "Internet Archive",
-                        "Free Music Archive",
-                        "Bandcamp",
-                        "Jamendo",
-                        "Pixabay Music",
-                    ],
-                )
-            ),
-            sources=sources or cls.__dataclass_fields__["sources"].default_factory(),
+            source_preset=source_preset or DEFAULT_SOURCE_PRESET,
+            source_priority=source_priority,
+            sources=sources,
             csv_report=bool(data.get("csv_report", True)),
             xlsx_report=bool(data.get("xlsx_report", True)),
         )
+        cfg.normalize_sources()
+        if loaded_version < CONFIG_VERSION:
+            if abs(cfg.phase_a_budget_ratio - LEGACY_PHASE_A_BUDGET_RATIO) < 1e-9:
+                cfg.phase_a_budget_ratio = 0.70
+                migration_applied = True
+            if abs(cfg.min_page_score - LEGACY_MIN_PAGE_SCORE) < 1e-9:
+                cfg.min_page_score = 0.50
+                migration_applied = True
+            if abs(cfg.min_best_seen_score - LEGACY_MIN_BEST_SEEN_SCORE) < 1e-9:
+                cfg.min_best_seen_score = 0.50
+                migration_applied = True
+            if cfg.max_results == 4:
+                cfg.max_results = 5
+                migration_applied = True
+        cfg._migration_applied = cfg._migration_applied or migration_applied or cfg.config_version != CONFIG_VERSION
+        cfg.config_version = CONFIG_VERSION
+        return cfg
+ 
+    def normalize_sources(self) -> None:
+        source_map = {source.name: source for source in self.sources if source.name in ALL_SOURCE_NAMES}
+        normalized: list[SourceConfig] = []
+        for default in _default_sources():
+            current = source_map.get(default.name)
+            if current is None:
+                normalized.append(default)
+                self._migration_applied = True
+                continue
+            normalized.append(
+                SourceConfig(
+                    name=default.name,
+                    enabled=current.enabled,
+                    max_variants=current.max_variants,
+                    min_downloadable_score=current.min_downloadable_score,
+                    min_page_score=current.min_page_score,
+                )
+            )
+        self.sources = normalized
+
+        ordered = [name for name in self.source_priority if name in ALL_SOURCE_NAMES]
+        for name in ALL_SOURCE_NAMES:
+            if name not in ordered:
+                ordered.append(name)
+                self._migration_applied = True
+        self.source_priority = ordered
+
+        if self.source_preset not in SOURCE_PRESETS and self.source_preset != CUSTOM_SOURCE_PRESET:
+            self.source_preset = DEFAULT_SOURCE_PRESET
+            self._migration_applied = True
+
+        if self.source_preset in SOURCE_PRESETS:
+            enabled = set(SOURCE_PRESETS[self.source_preset])
+            for source in self.sources:
+                if source.enabled != (source.name in enabled):
+                    self._migration_applied = True
+                source.enabled = source.name in enabled
 
     def save(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
+        self.normalize_sources()
+        self.config_version = CONFIG_VERSION
         path.write_text(
             json.dumps(self.to_dict(compact=True), ensure_ascii=False, indent=2), encoding="utf-8"
         )
@@ -249,7 +374,6 @@ class AppConfig:
         self.timeout = 5
         self.retry_count = 0
         self.per_song_timeout = 8
-        self.reduce_variants = True
         self.min_page_score = max(self.min_page_score, 0.52)
         self.min_best_seen_score = max(self.min_best_seen_score, 0.50)
 
@@ -263,15 +387,10 @@ class AppConfig:
         self.retry_count = max(self.retry_count, 1)
         self.per_song_timeout = max(self.per_song_timeout, 24)
         self.phase_a_budget_ratio = min(max(self.phase_a_budget_ratio, 0.62), 0.70)
-        self.reduce_variants = False
         self.maximize_query_variants = max(self.maximize_query_variants, MAXIMIZE_QUERY_VARIANTS)
         self.min_page_score = min(self.min_page_score, 0.44)
         self.min_best_seen_score = min(self.min_best_seen_score, 0.35)
         self.early_exit_score = max(self.early_exit_score, 0.98)
-        # Enable additional sources for maximize mode
-        for src in self.sources:
-            if src.name in {"Jamendo", "Pixabay Music"}:
-                src.enabled = True
 
     def validate(self) -> list[str]:
         """Return list of validation error strings (empty = valid)."""
@@ -310,6 +429,8 @@ class AppConfig:
             errors.append("blocked_after_failures must be >= 1")
         if self.fallback_policy not in {"strict", "page_or_best_seen"}:
             errors.append("fallback_policy must be 'strict' or 'page_or_best_seen'")
+        if self.source_preset not in SOURCE_PRESETS and self.source_preset != CUSTOM_SOURCE_PRESET:
+            errors.append("source_preset must be one of fast, balanced, maximize, custom")
         if self.cache_enabled and self.persistent_cache_enabled and not self.cache_file:
             errors.append("cache_file must be configured when persistent_cache_enabled is true")
         if not self.sources:
@@ -343,10 +464,6 @@ class AppConfig:
         if preset_sources is None:
             choices = ", ".join(SOURCE_PRESETS.keys())
             raise ValueError(f"Unknown preset {preset_name!r}. Choose from: {choices}")
-        existing_names = {s.name for s in self.sources}
-        for src_name in ALL_SOURCE_NAMES:
-            if src_name not in existing_names:
-                self.sources.append(SourceConfig(src_name, enabled=False))
-        for src in self.sources:
-            src.enabled = src.name in preset_sources
-        return [s.name for s in self.sources if s.enabled]
+        self.source_preset = key
+        self.normalize_sources()
+        return list(preset_sources)

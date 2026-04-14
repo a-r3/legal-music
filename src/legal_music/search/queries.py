@@ -33,12 +33,10 @@ def build_query_variants(song: str) -> list[QueryVariant]:
     artist, title = parse_artist_title(raw)
     title = normalize_space(strip_bracket_noise(title))
     artist = normalize_space(strip_feature_suffix(artist))
-    raw_without_features = normalize_space(strip_feature_suffix(raw))
     title_core = normalize_space(strip_mix_suffix(strip_feature_suffix(title)))
     full_core = normalize_space(" - ".join(part for part in [artist, title_core] if part))
     full_plain = normalize_space(" - ".join(part for part in [artist, title] if part))
     norm_full = normalize_song(full_plain or raw)
-    norm_title = normalize_song(title_core or title)
     accent_title = normalize_space(strip_accents(title_core or title))
 
     variants: list[QueryVariant] = []
@@ -59,14 +57,11 @@ def build_query_variants(song: str) -> list[QueryVariant]:
 
     add(raw, "raw")
     add(f'"{raw}"', "raw_quoted")
-    if raw_without_features and raw_without_features != raw:
-        add(raw_without_features, "raw_without_features")
     if artist and title:
         add(f"{artist} {title}", "artist_title")
         add(_quoted(artist, title), "artist_title_quoted")
-    if full_core and full_core not in {raw, raw_without_features, full_plain}:
+    if full_core and full_core not in {raw, full_plain}:
         add(full_core, "artist_title_core")
-        add(f'"{full_core}"', "artist_title_core_quoted")
     if norm_full and norm_full not in {raw.casefold(), full_core.casefold()}:
         add(norm_full, "normalized_full")
     if title:
@@ -74,13 +69,8 @@ def build_query_variants(song: str) -> list[QueryVariant]:
         add(f'"{title}"', "title_quoted", fallback=True)
     if title_core and title_core.casefold() != title.casefold():
         add(title_core, "title_core", fallback=True)
-        add(f'"{title_core}"', "title_core_quoted", fallback=True)
-    if norm_title and norm_title.casefold() not in {title.casefold(), title_core.casefold()}:
-        add(norm_title, "normalized_title", fallback=True)
     if accent_title and accent_title.casefold() not in {title.casefold(), title_core.casefold()}:
         add(accent_title, "accent_folded_title", fallback=True)
-    if artist and title_core:
-        add(f"{title_core} {artist}", "title_artist_inverted", fallback=True)
 
     seen: set[str] = set()
     deduped: list[QueryVariant] = []

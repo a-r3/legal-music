@@ -42,3 +42,12 @@ class TestBuildQueryVariants:
         kinds = {variant.kind for variant in variants}
         assert "title_only" in kinds or "title_core" in kinds
         assert "normalized_full" in kinds or "accent_folded_title" in kinds
+
+    def test_query_cleanup_removes_low_value_variants(self):
+        variants = build_query_variants("Artist - Song (feat. Guest) [Live Mix]")
+        kinds = {variant.kind for variant in variants}
+        assert "raw_without_features" not in kinds
+        assert "artist_title_core_quoted" not in kinds
+        assert "title_core_quoted" not in kinds
+        assert "normalized_title" not in kinds
+        assert "title_artist_inverted" not in kinds

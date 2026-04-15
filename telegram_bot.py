@@ -126,6 +126,54 @@ _URL_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Separators users commonly write instead of " - "
+_SEP_RE = re.compile(r"\s*[/|,–—]\s*|\s+by\s+|\s*:\s*", re.IGNORECASE)
+_HAS_DASH_RE = re.compile(r"\s+-\s+")
+
+
+def _smart_queries(text: str) -> list[str]:
+    """Generate multiple search attempts from a free-form user input.
+
+    Handles cases like:
+      "dua lipa levitating"       → "dua lipa - levitating", "dua - lipa levitating" …
+      "Levitating / Dua Lipa"     → "Levitating - Dua Lipa"
+      "Dua Lipa - Levitating"     → passed through as-is (already correct)
+      "eminem lose yourself"      → "eminem - lose yourself"
+    Returns a deduplicated ordered list, best guesses first.
+    """
+    text = text.strip()
+    attempts: list[str] = []
+
+    def _add(q: str) -> None:
+        q = re.sub(r"\s{2,}", " ", q).strip(" -")
+        if q and q not in attempts:
+            attempts.append(q)
+
+    # 1. Always try the original input first
+    _add(text)
+
+    # 2. Normalise other separators (/ | , : — by) to " - "
+    normalised = _SEP_RE.sub(" - ", text).strip()
+    _add(normalised)
+
+    # 3. Use the normalised version as the base for further attempts
+    base = normalised if _HAS_DASH_RE.search(normalised) else text
+
+    # 4. If there's STILL no " - ", try splitting at each word boundary
+    #    so "dua lipa levitating" → "dua lipa - levitating" (best guess at position 2)
+    if not _HAS_DASH_RE.search(base):
+        words = base.split()
+        if len(words) >= 2:
+            for split in range(1, min(4, len(words))):
+                artist_part = " ".join(words[:split])
+                title_part  = " ".join(words[split:])
+                if artist_part and title_part:
+                    _add(f"{artist_part} - {title_part}")
+        # Also try entire input as title-only
+        _add(base)
+
+    return attempts
+
 # ---------------------------------------------------------------------------
 # Global state
 # ---------------------------------------------------------------------------
@@ -286,34 +334,50 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await handle_url(update, context)
         return
 
-    song = text
-    logger.info("Song search request: %r", song)
+    logger.info("Song search request: %r", text)
 
-    await _safe_reply(update, f"🔍 Axtarılır: *{song}*…")
+    # Generate smart query attempts from the raw input
+    queries = _smart_queries(text)
+    display_name = text  # shown to user in messages
+
+    await _safe_reply(update, f"🔍 Axtarılır: *{display_name}*…")
 
     try:
         cfg = _get_cfg()
-        runner = AsyncSearchRunner(cfg, max_concurrent=1, db_path=DB_PATH)
-        result = await runner.search_one(song)
-        runner.close()
+        result = None
+
+        # Try each query variant until we get a hit
+        for attempt in queries:
+            logger.info("Trying query: %r", attempt)
+            runner = AsyncSearchRunner(cfg, max_concurrent=1, db_path=DB_PATH)
+            res = await runner.search_one(attempt)
+            runner.close()
+
+            if res.status in (SongStatus.DOWNLOADED, SongStatus.PAGE_FOUND):
+                result = res
+                display_name = attempt  # show which variant succeeded
+                break
+
+        # If nothing found, use the last result (NOT_FOUND)
+        if result is None:
+            result = res  # type: ignore[possibly-undefined]
 
         if result.status == SongStatus.DOWNLOADED and result.direct_url:
-            await _safe_reply(update, f"⬇️ Yüklənir: *{song}*…")
+            await _safe_reply(update, f"⬇️ Yüklənir: *{display_name}*…")
             try:
                 DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
                 saved = download_file(
                     result.direct_url,
-                    song,
+                    display_name,
                     DOWNLOADS_DIR,
                 )
-                caption = f"🎵 {song}\n📂 {result.source} | ⭐ {result.score:.2f}"
+                caption = f"🎵 {display_name}\n📂 {result.source} | ⭐ {result.score:.2f}"
                 await _send_audio(context, saved, caption, reply_update=update)
             except FileNotFoundError:
-                # Metadata mismatch — file was rejected
-                await _safe_reply(update, f"❌ Tapılmadı: {song}")
+                await _safe_reply(update, f"❌ Tapılmadı: {display_name}")
             except Exception as exc:
-                _log_error(f"download:{song}", exc)
-                await _safe_reply(update, f"⚠️ Yüklənmə xətası: {song}\n{exc}")
+                _log_error(f"download:{display_name}", exc)
+                await _safe_reply(update, f"⚠️ Yüklənmə xətası: {display_name}\n{exc}")
 
         elif result.status == SongStatus.PAGE_FOUND and result.page_url:
             await _safe_reply(
@@ -321,10 +385,15 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 f"🔗 Səhifə tapıldı (birbaşa yükləmə yoxdur):\n{result.page_url}",
             )
         else:
-            await _safe_reply(update, f"❌ Tapılmadı: {song}")
+            await _safe_reply(
+                update,
+                f"❌ Tapılmadı: *{text}*\n\n"
+                f"💡 İpucu: `İfaçı - Mahnı adı` formatında yaz\n"
+                f"Nümunə: `Dua Lipa - Levitating`",
+            )
 
     except Exception as exc:
-        _log_error(f"handle_text:{song}", exc)
+        _log_error(f"handle_text:{text}", exc)
         await _safe_reply(update, f"⚠️ Xəta baş verdi: {exc}")
 
 

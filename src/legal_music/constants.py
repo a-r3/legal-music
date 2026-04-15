@@ -1,7 +1,7 @@
 """Project-wide constants."""
 from __future__ import annotations
 
-VERSION = "2.2.0"
+VERSION = "2.3.0"
 APP_NAME = "legal-music"
 APP_DIR = "legal-music"
 

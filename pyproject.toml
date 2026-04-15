@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "legal-music"
-version = "2.2.0"
+version = "2.3.0"
 description = "Professional CLI to find and download music from legal, permitted sources"
 readme = "README.md"
 license = {text = "MIT"}

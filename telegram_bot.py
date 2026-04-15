@@ -1,49 +1,39 @@
 """Telegram bot for legal-music.
 
-Usage:
-    cp .env.example .env
-    # Fill in BOT_TOKEN and CHANNEL_ID in .env
-    python telegram_bot.py
+Xüsusiyyətlər:
+  - Mahnı adı ilə axtarış  → qanuni mənbələr, tapılmazsa yt-dlp fallback
+  - URL göndər             → birbaşa yt-dlp ilə yüklə
+  - .txt fayl göndər       → toplu yükləmə (hər sətir bir mahnı)
+  - /status, /help, /start
 
-Bot commands:
-    /start  - Welcome message
-    /help   - Usage instructions
-    /status - Cache stats, download count, source health
-
-Message handling:
-    Any plain text  -> treated as a song name (e.g. "Dua Lipa - Levitating")
-    Any URL         -> passed directly to yt-dlp for download
-
-After a successful download the .mp3 is forwarded to CHANNEL_ID.
-All errors are logged to output/error_log.txt.
+BOT_TOKEN və CHANNEL_ID → .env faylından oxunur
 """
 from __future__ import annotations
 
 import asyncio
+import glob
 import logging
 import os
 import re
 import shutil
 import sys
+import tempfile
 from datetime import datetime
 from pathlib import Path
 
-# Load .env before any other imports that might need env vars
 try:
     from dotenv import load_dotenv
-
     load_dotenv()
 except ImportError:
-    pass  # python-dotenv not installed; fall back to os.environ
+    pass
 
 # ---------------------------------------------------------------------------
-# Logging setup  — must be done before importing telegram
+# Logging
 # ---------------------------------------------------------------------------
 
 OUTPUT_DIR = Path("output")
-LOG_DIR = OUTPUT_DIR
-LOG_DIR.mkdir(parents=True, exist_ok=True)
-ERROR_LOG = LOG_DIR / "error_log.txt"
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+ERROR_LOG = OUTPUT_DIR / "error_log.txt"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -56,12 +46,11 @@ logging.basicConfig(
 logger = logging.getLogger("legal-music.bot")
 
 # ---------------------------------------------------------------------------
-# Telegram imports
+# Telegram
 # ---------------------------------------------------------------------------
 
 try:
     from telegram import Update
-    from telegram.constants import ParseMode
     from telegram.error import NetworkError, TelegramError
     from telegram.ext import (
         Application,
@@ -71,124 +60,61 @@ try:
         filters,
     )
 except ImportError:
-    logger.error(
-        "python-telegram-bot not installed. Run: pip install python-telegram-bot"
-    )
+    logger.error("python-telegram-bot quraşdırılmayıb: pip install python-telegram-bot")
     sys.exit(1)
 
 # ---------------------------------------------------------------------------
-# legal-music imports
+# legal-music
 # ---------------------------------------------------------------------------
 
 try:
-    from src.legal_music.async_engine import AsyncSearchRunner
-    from src.legal_music.config import AppConfig
-    from src.legal_music.db_cache import SQLiteCache
-    from src.legal_music.downloader import download_file
-    from src.legal_music.models import SongStatus
-    from src.legal_music.utils import default_data_dir, default_output_dir
+    from legal_music.async_engine import AsyncSearchRunner
+    from legal_music.config import AppConfig
+    from legal_music.db_cache import SQLiteCache
+    from legal_music.downloader import download_file
+    from legal_music.models import SongStatus
+    from legal_music.playlist import read_playlist
+    from legal_music.utils import default_data_dir, default_output_dir
 except ImportError:
     try:
-        from legal_music.async_engine import AsyncSearchRunner
-        from legal_music.config import AppConfig
-        from legal_music.db_cache import SQLiteCache
-        from legal_music.downloader import download_file
-        from legal_music.models import SongStatus
-        from legal_music.utils import default_data_dir, default_output_dir
+        from src.legal_music.async_engine import AsyncSearchRunner
+        from src.legal_music.config import AppConfig
+        from src.legal_music.db_cache import SQLiteCache
+        from src.legal_music.downloader import download_file
+        from src.legal_music.models import SongStatus
+        from src.legal_music.playlist import read_playlist
+        from src.legal_music.utils import default_data_dir, default_output_dir
     except ImportError:
-        logger.error(
-            "legal-music package not found. "
-            "Run: pip install -e . from the repo root."
-        )
+        logger.error("legal-music paketi tapılmadı: pip install -e .")
         sys.exit(1)
 
 # ---------------------------------------------------------------------------
-# Configuration
+# Config
 # ---------------------------------------------------------------------------
 
-BOT_TOKEN: str = os.getenv("BOT_TOKEN", "")
+BOT_TOKEN: str  = os.getenv("BOT_TOKEN", "")
 CHANNEL_ID: str = os.getenv("CHANNEL_ID", "")
-DOWNLOADS_DIR: Path = default_output_dir() / "bot_downloads"
-DB_PATH: Path = default_data_dir() / "cache" / "bot_cache.db"
+DOWNLOADS_DIR   = default_output_dir() / "bot_downloads"
+DB_PATH         = default_data_dir() / "cache" / "bot_cache.db"
 
 if not BOT_TOKEN:
-    logger.error("BOT_TOKEN is not set. Create a .env file with BOT_TOKEN=<token>")
+    logger.error("BOT_TOKEN tapılmadı. .env faylını yoxlayın.")
     sys.exit(1)
 
-if not CHANNEL_ID:
-    logger.warning("CHANNEL_ID is not set — downloaded files will only be sent to the requester.")
-
-_URL_RE = re.compile(
-    r"https?://[^\s]+"
-    r"|www\.[^\s]+"
-    r"|youtu\.be/[^\s]+"
-    r"|t\.me/[^\s]+",
-    re.IGNORECASE,
-)
-
-# Separators users commonly write instead of " - "
+_URL_RE = re.compile(r"https?://[^\s]+|www\.[^\s]+|youtu\.be/[^\s]+", re.IGNORECASE)
 _SEP_RE = re.compile(r"\s*[/|,–—]\s*|\s+by\s+|\s*:\s*", re.IGNORECASE)
 _HAS_DASH_RE = re.compile(r"\s+-\s+")
 
-
-def _smart_queries(text: str) -> list[str]:
-    """Generate multiple search attempts from a free-form user input.
-
-    Handles cases like:
-      "dua lipa levitating"       → "dua lipa - levitating", "dua - lipa levitating" …
-      "Levitating / Dua Lipa"     → "Levitating - Dua Lipa"
-      "Dua Lipa - Levitating"     → passed through as-is (already correct)
-      "eminem lose yourself"      → "eminem - lose yourself"
-    Returns a deduplicated ordered list, best guesses first.
-    """
-    text = text.strip()
-    attempts: list[str] = []
-
-    def _add(q: str) -> None:
-        q = re.sub(r"\s{2,}", " ", q).strip(" -")
-        if q and q not in attempts:
-            attempts.append(q)
-
-    # 1. Always try the original input first
-    _add(text)
-
-    # 2. Normalise other separators (/ | , : — by) to " - "
-    normalised = _SEP_RE.sub(" - ", text).strip()
-    _add(normalised)
-
-    # 3. Use the normalised version as the base for further attempts
-    base = normalised if _HAS_DASH_RE.search(normalised) else text
-
-    # 4. If there's STILL no " - ", try splitting at each word boundary
-    #    so "dua lipa levitating" → "dua lipa - levitating" (best guess at position 2)
-    if not _HAS_DASH_RE.search(base):
-        words = base.split()
-        if len(words) >= 2:
-            for split in range(1, min(4, len(words))):
-                artist_part = " ".join(words[:split])
-                title_part  = " ".join(words[split:])
-                if artist_part and title_part:
-                    _add(f"{artist_part} - {title_part}")
-        # Also try entire input as title-only
-        _add(base)
-
-    return attempts
-
-# ---------------------------------------------------------------------------
-# Global state
-# ---------------------------------------------------------------------------
-
 _cfg: AppConfig | None = None
-_db: SQLiteCache | None = None
+_db:  SQLiteCache | None = None
 _downloads_total: int = 0
 
 
 def _get_cfg() -> AppConfig:
     global _cfg
     if _cfg is None:
-        from pathlib import Path
-        cfg_path = Path.home() / ".config" / "legal-music" / "config.json"
-        _cfg = AppConfig.load(cfg_path) if cfg_path.exists() else AppConfig()
+        p = Path.home() / ".config" / "legal-music" / "config.json"
+        _cfg = AppConfig.load(p) if p.exists() else AppConfig()
     return _cfg
 
 
@@ -200,36 +126,96 @@ def _get_db() -> SQLiteCache:
 
 
 # ---------------------------------------------------------------------------
-# Helper: log error to file
+# Smart query generator
 # ---------------------------------------------------------------------------
 
+def _smart_queries(text: str) -> list[str]:
+    """'dua lipa levitating' → ['dua lipa levitating', 'dua lipa - levitating', ...]"""
+    text = text.strip()
+    attempts: list[str] = []
 
-def _log_error(context: str, exc: Exception) -> None:
+    def _add(q: str) -> None:
+        q = re.sub(r"\s{2,}", " ", q).strip(" -")
+        if q and q not in attempts:
+            attempts.append(q)
+
+    _add(text)
+
+    normalised = _SEP_RE.sub(" - ", text).strip()
+    _add(normalised)
+
+    base = normalised if _HAS_DASH_RE.search(normalised) else text
+    if not _HAS_DASH_RE.search(base):
+        words = base.split()
+        for split in range(1, min(4, len(words))):
+            artist = " ".join(words[:split])
+            title  = " ".join(words[split:])
+            if artist and title:
+                _add(f"{artist} - {title}")
+        _add(base)
+
+    return attempts
+
+
+# ---------------------------------------------------------------------------
+# yt-dlp fallback: search by name and download
+# ---------------------------------------------------------------------------
+
+async def _ytdlp_search_download(query: str, dest_dir: Path) -> Path:
+    """YouTube-da 'query' axtarıb birinci nəticəni MP3 kimi yüklə."""
+    if not shutil.which("yt-dlp"):
+        raise RuntimeError("yt-dlp quraşdırılmayıb")
+
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    output_template = str(dest_dir / "%(title)s.%(ext)s")
+
+    cmd = [
+        "yt-dlp",
+        f"ytsearch1:{query}",
+        "-x", "--audio-format", "mp3",
+        "--audio-quality", "0",
+        "-o", output_template,
+        "--no-warnings", "--quiet",
+        "--no-playlist",
+    ]
+
+    loop = asyncio.get_event_loop()
+    import subprocess
+
+    def _run():
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr[:300] or "yt-dlp xətası")
+
+    await loop.run_in_executor(None, _run)
+
+    # Ən son MP3 faylı tap
+    mp3_files = sorted(dest_dir.glob("*.mp3"), key=lambda p: p.stat().st_mtime)
+    if not mp3_files:
+        raise RuntimeError("yt-dlp: fayl tapılmadı")
+    return mp3_files[-1]
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _log_error(ctx: str, exc: Exception) -> None:
     stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     try:
         with ERROR_LOG.open("a", encoding="utf-8") as f:
-            f.write(f"[{stamp}] ERROR [{context}]: {exc}\n")
+            f.write(f"[{stamp}] ERROR [{ctx}]: {exc}\n")
     except Exception:
         pass
-    logger.error("[%s] %s", context, exc)
-
-
-# ---------------------------------------------------------------------------
-# Helper: safe reply that never crashes the bot
-# ---------------------------------------------------------------------------
+    logger.error("[%s] %s", ctx, exc)
 
 
 async def _safe_reply(update: Update, text: str) -> None:
     try:
         if update.message:
-            await update.message.reply_text(text)
+            await update.message.reply_text(text, parse_mode=None)
     except Exception as exc:
-        logger.warning("Failed to send reply: %s", exc)
-
-
-# ---------------------------------------------------------------------------
-# Helper: send audio to channel + requester
-# ---------------------------------------------------------------------------
+        logger.warning("reply göndərilmədi: %s", exc)
 
 
 async def _send_audio(
@@ -241,188 +227,163 @@ async def _send_audio(
     global _downloads_total
     _downloads_total += 1
 
-    async def _send_one(chat_id: str | int) -> None:
+    async def _one(chat_id):
         try:
-            with file_path.open("rb") as audio_file:
+            with file_path.open("rb") as f:
                 await context.bot.send_audio(
-                    chat_id=chat_id,
-                    audio=audio_file,
+                    chat_id=chat_id, audio=f,
                     caption=caption[:1024],
-                    read_timeout=60,
-                    write_timeout=60,
+                    read_timeout=60, write_timeout=60,
                 )
-        except TelegramError as exc:
-            logger.warning("send_audio failed to %s: %s", chat_id, exc)
+        except TelegramError as e:
+            logger.warning("send_audio xətası (%s): %s", chat_id, e)
 
     if CHANNEL_ID:
-        await _send_one(CHANNEL_ID)
-
+        await _one(CHANNEL_ID)
     if reply_update and reply_update.effective_chat:
-        chat_id = reply_update.effective_chat.id
-        if str(chat_id) != str(CHANNEL_ID):
-            await _send_one(chat_id)
+        cid = reply_update.effective_chat.id
+        if str(cid) != str(CHANNEL_ID):
+            await _one(cid)
+
+
+# ---------------------------------------------------------------------------
+# Bir mahnını axtar + yüklə  (core logic, hər yerdə istifadə edilir)
+# ---------------------------------------------------------------------------
+
+async def _search_and_download(
+    song: str,
+    context: ContextTypes.DEFAULT_TYPE,
+    reply_update: Update | None = None,
+) -> bool:
+    """Mahnını axtar, yüklə, kanala göndər. Uğursa True qaytarır."""
+    queries = _smart_queries(song)
+    cfg     = _get_cfg()
+    result  = None
+    matched_query = song
+
+    # 1. Qanuni mənbələr
+    for attempt in queries:
+        runner = AsyncSearchRunner(cfg, max_concurrent=1, db_path=DB_PATH)
+        res = await runner.search_one(attempt)
+        runner.close()
+        if res.status in (SongStatus.DOWNLOADED, SongStatus.PAGE_FOUND):
+            result = res
+            matched_query = attempt
+            break
+
+    # 2. Tapıldısa yüklə
+    if result and result.status == SongStatus.DOWNLOADED and result.direct_url:
+        try:
+            DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
+            saved = await asyncio.get_event_loop().run_in_executor(
+                None, lambda: download_file(result.direct_url, matched_query, DOWNLOADS_DIR)
+            )
+            caption = f"🎵 {matched_query}\n📂 {result.source}"
+            await _send_audio(context, saved, caption, reply_update)
+            return True
+        except Exception as exc:
+            logger.warning("Qanuni mənbə yükləmə xətası (%s): %s", song, exc)
+
+    # 3. yt-dlp fallback — YouTube-da axtar
+    logger.info("yt-dlp fallback: %r", song)
+    try:
+        DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
+        saved = await _ytdlp_search_download(song, DOWNLOADS_DIR)
+        caption = f"🎵 {song}\n📂 YouTube (yt-dlp)"
+        await _send_audio(context, saved, caption, reply_update)
+        return True
+    except Exception as exc:
+        logger.warning("yt-dlp axtarış xətası (%s): %s", song, exc)
+        return False
 
 
 # ---------------------------------------------------------------------------
 # Handlers
 # ---------------------------------------------------------------------------
 
-
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Welcome handler."""
-    await _safe_reply(
-        update,
-        "🎵 *Legal Music Bot*\n\n"
-        "Mənə mahnı adı göndər, mən onu tapıb yükləyəcəyəm!\n\n"
-        "Nümunə: `Dua Lipa - Levitating`\n\n"
-        "Komandalar:\n"
-        "  /help   - Kömək\n"
-        "  /status - Bot statusu",
+    await _safe_reply(update,
+        "🎵 Legal Music Bot\n\n"
+        "Mahnı adı yaz → yükləyirəm\n"
+        "YouTube/URL göndər → yükləyirəm\n"
+        ".txt fayl göndər → toplu yükləmə\n\n"
+        "Nümunə: Dua Lipa - Levitating\n\n"
+        "/help /status"
     )
 
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/help command."""
-    text = (
-        "🎵 *Legal Music Bot — İstifadə Qaydası*\n\n"
-        "*Mahnı axtar:*\n"
-        "Sadəcə mahnının adını yaz:\n"
-        "`İfaçı - Mahnı adı`\n"
-        "Nümunə: `Bach - Prelude in C Major`\n\n"
-        "*URL yüklə:*\n"
-        "İstənilən YouTube/SoundCloud URL göndər, bot yt-dlp ilə yükləyəcək.\n\n"
-        "*Komandalar:*\n"
-        "  /status — Keş ölçüsü, yüklənmiş mahnılar, mənbə statusu\n"
-        "  /help   — Bu mesaj\n\n"
-        "*Qeyd:* Bot yalnız qanuni, Creative Commons licensiyalı mahnıları tapır."
+    await _safe_reply(update,
+        "🎵 Legal Music Bot — İstifadə\n\n"
+        "Mahnı adı:\n"
+        "  Dua Lipa - Levitating\n"
+        "  dua lipa levitating  (tire olmadan da olur)\n\n"
+        "URL yüklə:\n"
+        "  https://youtube.com/watch?v=...\n\n"
+        "Toplu yükləmə:\n"
+        "  songs.txt faylı göndər (hər sətirdə bir mahnı)\n\n"
+        "/status — statistika\n"
+        "/help   — bu mesaj"
     )
-    await _safe_reply(update, text)
 
 
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/status command — show cache and download stats."""
     try:
-        db_stats = _get_db().stats()
-        ytdlp_ok = shutil.which("yt-dlp") is not None
-
-        cfg = _get_cfg()
-        sources = cfg.enabled_source_names()
-
-        lines = [
-            "📊 *Bot Statusu*\n",
-            f"💾 Keş (sorğu): {db_stats.get('query_cache_entries', 0)}",
-            f"💾 Keş (mahnı): {db_stats.get('song_cache_entries', 0)}",
-            f"✅ Yüklənmiş: {_downloads_total}",
-            f"🎯 Fəal mənbələr: {', '.join(sources)}",
-            f"🔧 yt-dlp: {'✅ quraşdırılıb' if ytdlp_ok else '❌ quraşdırılmayıb'}",
-        ]
-        await _safe_reply(update, "\n".join(lines))
+        stats = _get_db().stats()
+        ytdlp = "✅" if shutil.which("yt-dlp") else "❌"
+        sources = ", ".join(_get_cfg().enabled_source_names())
+        await _safe_reply(update,
+            f"📊 Bot Statusu\n\n"
+            f"💾 Keş (sorğu): {stats.get('query_cache_entries', 0)}\n"
+            f"💾 Keş (mahnı): {stats.get('song_cache_entries', 0)}\n"
+            f"✅ Yüklənmiş: {_downloads_total}\n"
+            f"🎯 Mənbələr: {sources}\n"
+            f"🔧 yt-dlp: {ytdlp}"
+        )
     except Exception as exc:
         _log_error("cmd_status", exc)
-        await _safe_reply(update, "⚠️ Status alınarkən xəta baş verdi.")
 
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle plain text messages as song search requests."""
+    """Mətn mesajı → mahnı axtarışı."""
     if not update.message or not update.message.text:
         return
-
     text = update.message.text.strip()
 
-    # Route URLs to the URL handler
     if _URL_RE.search(text):
         await handle_url(update, context)
         return
 
-    logger.info("Song search request: %r", text)
-
-    # Generate smart query attempts from the raw input
-    queries = _smart_queries(text)
-    display_name = text  # shown to user in messages
-
-    await _safe_reply(update, f"🔍 Axtarılır: *{display_name}*…")
-
-    try:
-        cfg = _get_cfg()
-        result = None
-
-        # Try each query variant until we get a hit
-        for attempt in queries:
-            logger.info("Trying query: %r", attempt)
-            runner = AsyncSearchRunner(cfg, max_concurrent=1, db_path=DB_PATH)
-            res = await runner.search_one(attempt)
-            runner.close()
-
-            if res.status in (SongStatus.DOWNLOADED, SongStatus.PAGE_FOUND):
-                result = res
-                display_name = attempt  # show which variant succeeded
-                break
-
-        # If nothing found, use the last result (NOT_FOUND)
-        if result is None:
-            result = res  # type: ignore[possibly-undefined]
-
-        if result.status == SongStatus.DOWNLOADED and result.direct_url:
-            await _safe_reply(update, f"⬇️ Yüklənir: *{display_name}*…")
-            try:
-                DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
-                saved = download_file(
-                    result.direct_url,
-                    display_name,
-                    DOWNLOADS_DIR,
-                )
-                caption = f"🎵 {display_name}\n📂 {result.source} | ⭐ {result.score:.2f}"
-                await _send_audio(context, saved, caption, reply_update=update)
-            except FileNotFoundError:
-                await _safe_reply(update, f"❌ Tapılmadı: {display_name}")
-            except Exception as exc:
-                _log_error(f"download:{display_name}", exc)
-                await _safe_reply(update, f"⚠️ Yüklənmə xətası: {display_name}\n{exc}")
-
-        elif result.status == SongStatus.PAGE_FOUND and result.page_url:
-            await _safe_reply(
-                update,
-                f"🔗 Səhifə tapıldı (birbaşa yükləmə yoxdur):\n{result.page_url}",
-            )
-        else:
-            await _safe_reply(
-                update,
-                f"❌ Tapılmadı: *{text}*\n\n"
-                f"💡 İpucu: `İfaçı - Mahnı adı` formatında yaz\n"
-                f"Nümunə: `Dua Lipa - Levitating`",
-            )
-
-    except Exception as exc:
-        _log_error(f"handle_text:{text}", exc)
-        await _safe_reply(update, f"⚠️ Xəta baş verdi: {exc}")
+    await _safe_reply(update, f"🔍 Axtarılır: {text}…")
+    found = await _search_and_download(text, context, reply_update=update)
+    if not found:
+        await _safe_reply(update,
+            f"❌ Tapılmadı: {text}\n\n"
+            f"💡 Format: İfaçı - Mahnı adı\n"
+            f"Nümunə: Dua Lipa - Levitating"
+        )
 
 
 async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle URL messages — download via yt-dlp."""
+    """URL mesajı → yt-dlp ilə yüklə."""
     if not update.message or not update.message.text:
         return
-
     text = update.message.text.strip()
     match = _URL_RE.search(text)
     if not match:
         return
-
     url = match.group(0)
-    logger.info("URL download request: %r", url)
 
     if not shutil.which("yt-dlp"):
-        await _safe_reply(update, "❌ yt-dlp quraşdırılmayıb. `pip install yt-dlp` edin.")
+        await _safe_reply(update, "❌ yt-dlp quraşdırılmayıb: pip install yt-dlp")
         return
 
-    await _safe_reply(update, f"⬇️ URL yüklənir…\n`{url}`")
+    await _safe_reply(update, f"⬇️ URL yüklənir…")
 
     try:
-        from .search.sources.ytdlp_source import download_via_ytdlp
+        from legal_music.search.sources.ytdlp_source import download_via_ytdlp
     except ImportError:
-        try:
-            from legal_music.search.sources.ytdlp_source import download_via_ytdlp
-        except ImportError:
-            from src.legal_music.search.sources.ytdlp_source import download_via_ytdlp  # type: ignore[no-redef]
+        from src.legal_music.search.sources.ytdlp_source import download_via_ytdlp  # type: ignore
 
     try:
         DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
@@ -430,59 +391,118 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         saved = await asyncio.get_event_loop().run_in_executor(
             None, lambda: download_via_ytdlp(url, dest)
         )
-        caption = f"🎵 URL yükləməsi\n{url[:80]}"
-        await _send_audio(context, saved, caption, reply_update=update)
+        await _send_audio(context, saved, f"🎵 {url[:80]}", reply_update=update)
     except Exception as exc:
         _log_error(f"handle_url:{url}", exc)
         await _safe_reply(update, f"❌ URL yüklənmədi: {exc}")
+
+
+async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """TXT fayl → toplu yükləmə."""
+    if not update.message or not update.message.document:
+        return
+
+    doc = update.message.document
+    if not doc.file_name or not doc.file_name.lower().endswith(".txt"):
+        await _safe_reply(update, "⚠️ Yalnız .txt faylı göndərin (hər sətirdə bir mahnı)")
+        return
+
+    await _safe_reply(update, "📄 Fayl alındı, mahnılar axtarılır…")
+
+    # Faylı yüklə
+    try:
+        tg_file = await context.bot.get_file(doc.file_id)
+        with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as tmp:
+            tmp_path = Path(tmp.name)
+        await tg_file.download_to_drive(tmp_path)
+    except Exception as exc:
+        _log_error("handle_document:download", exc)
+        await _safe_reply(update, f"❌ Fayl yüklənmədi: {exc}")
+        return
+
+    # Sətirləri oxu
+    try:
+        songs = read_playlist(tmp_path)
+        tmp_path.unlink(missing_ok=True)
+    except Exception as exc:
+        tmp_path.unlink(missing_ok=True)
+        await _safe_reply(update, f"❌ Fayl oxunmadı: {exc}")
+        return
+
+    if not songs:
+        await _safe_reply(update, "⚠️ Faylda mahnı tapılmadı.")
+        return
+
+    await _safe_reply(update, f"🎵 {len(songs)} mahnı tapıldı. Yüklənir…")
+
+    ok_count = 0
+    fail_count = 0
+    fail_list: list[str] = []
+
+    for i, song in enumerate(songs, 1):
+        try:
+            await _safe_reply(update, f"[{i}/{len(songs)}] 🔍 {song}")
+            found = await _search_and_download(song, context, reply_update=None)
+            if found:
+                ok_count += 1
+            else:
+                fail_count += 1
+                fail_list.append(song)
+        except Exception as exc:
+            _log_error(f"batch:{song}", exc)
+            fail_count += 1
+            fail_list.append(song)
+
+    # Yekun hesabat
+    summary = (
+        f"✅ Toplu yükləmə tamamlandı!\n\n"
+        f"✅ Uğurlu: {ok_count}/{len(songs)}\n"
+        f"❌ Tapılmadı: {fail_count}/{len(songs)}"
+    )
+    if fail_list:
+        summary += "\n\nTapılmayanlar:\n" + "\n".join(f"• {s}" for s in fail_list[:20])
+        if len(fail_list) > 20:
+            summary += f"\n… və {len(fail_list) - 20} daha"
+    await _safe_reply(update, summary)
 
 
 # ---------------------------------------------------------------------------
 # Error handler
 # ---------------------------------------------------------------------------
 
-
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Log errors and attempt to recover from network issues."""
     exc = context.error
     if isinstance(exc, NetworkError):
-        logger.warning("Network error (will auto-reconnect): %s", exc)
+        logger.warning("Şəbəkə xətası (avtomatik yenidən qoşulur): %s", exc)
     else:
-        logger.error("Unhandled exception: %s", exc, exc_info=exc)
+        logger.error("Xəta: %s", exc, exc_info=exc)
         if exc:
             _log_error("unhandled", exc)
 
 
 # ---------------------------------------------------------------------------
-# Main entrypoint
+# Main
 # ---------------------------------------------------------------------------
 
-
 def main() -> None:
-    logger.info("Starting Legal Music Bot…")
+    logger.info("Legal Music Bot başladılır…")
 
-    app = (
-        Application.builder()
-        .token(BOT_TOKEN)
-        .build()
-    )
+    app = Application.builder().token(BOT_TOKEN).build()
 
-    # Command handlers
-    app.add_handler(CommandHandler("start", cmd_start))
-    app.add_handler(CommandHandler("help", cmd_help))
+    app.add_handler(CommandHandler("start",  cmd_start))
+    app.add_handler(CommandHandler("help",   cmd_help))
     app.add_handler(CommandHandler("status", cmd_status))
 
-    # Message handlers — URLs take priority over plain text
+    # Sənəd (txt fayl) → toplu yükləmə
+    app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
+
+    # Mətn → mahnı axtarışı
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
-    # Error handler
     app.add_error_handler(error_handler)
 
-    logger.info("Bot running. Press Ctrl+C to stop.")
-    app.run_polling(
-        allowed_updates=Update.ALL_TYPES,
-        drop_pending_updates=True,
-    )
+    logger.info("Bot işləyir. Ctrl+C ilə dayandırın.")
+    app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
 
 if __name__ == "__main__":

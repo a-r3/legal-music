@@ -19,6 +19,7 @@ It's optimized for practical real-world use:
 - **Bounded execution**: Per-song time budgets prevent stalling on difficult searches
 - **Source health tracking**: Unhealthy sources are automatically skipped and retried later
 - **Two search profiles**: Balanced mode (fast, practical) and maximize mode (more thorough)
+- **Phase-based search**: Phase A prioritizes Internet Archive + Free Music Archive; Phase B is bounded rescue
 - **Legal-only**: Internet Archive, Bandcamp, Free Music Archive, Jamendo, Pixabay Music — no piracy
 - **Simple workflow**: dry-run mode to check, then download when ready
 
@@ -49,25 +50,39 @@ The engine prefers higher tiers first, so a downloaded track always beats a page
 
 ## Install
 
-### Quick start with pipx (recommended for end users)
+### One-command setup (Telegram Bot + CLI)
 
 ```bash
-pipx install legal-music
-legal-music init
+git clone https://github.com/a-r3/legal-music.git
+cd legal-music
+bash install.sh
 ```
 
-### Development (from source)
+The installer will:
+1. Check Python 3.10+, install `yt-dlp` and `ffmpeg` if missing
+2. Install all Python dependencies automatically
+3. Ask for your **Bot Token** (from [@BotFather](https://t.me/BotFather)) and **Channel ID**
+4. Register global commands `music-start` / `music-stop`
+5. Optionally start the bot immediately
+
+After install, from any terminal:
+```bash
+music-start   # start the bot
+music-stop    # stop the bot
+```
+
+### CLI only (without Telegram bot)
 
 ```bash
-git clone https://github.com/your-org/legal-music.git
+git clone https://github.com/a-r3/legal-music.git
 cd legal-music
-pip install -e ".[dev]"
+pip install --break-system-packages -e .
 ```
 
 ### Upgrade
 
 ```bash
-pipx upgrade legal-music
+cd legal-music && git pull && bash install.sh
 ```
 
 ---
@@ -187,22 +202,22 @@ Generated at `~/.config/legal-music/config.json`:
   "max_results": 5,
   "timeout": 10,
   "retry_count": 1,
-  "per_song_timeout": 16,
-  "phase_a_budget_ratio": 0.70,
+  "per_song_timeout": 18,
+  "phase_a_budget_ratio": 0.76,
   "min_downloadable_score": 0.46,
   "min_page_score": 0.50,
   "min_best_seen_score": 0.50,
   "balanced_query_variants": 5,
-  "maximize_query_variants": 8,
+  "maximize_query_variants": 6,
   "cache_enabled": true,
-  "persistent_cache_enabled": false,
+  "persistent_cache_enabled": true,
   "source_priority": ["Internet Archive", "Free Music Archive", "Bandcamp", "Jamendo", "Pixabay Music"],
   "sources": [
     {"name": "Internet Archive", "enabled": true, "max_variants": 5},
     {"name": "Free Music Archive", "enabled": true, "max_variants": 4},
-    {"name": "Bandcamp", "enabled": true, "max_variants": 3},
-    {"name": "Jamendo", "enabled": false, "max_variants": 4},
-    {"name": "Pixabay Music", "enabled": false, "max_variants": 3}
+    {"name": "Bandcamp", "enabled": true, "max_variants": 1, "min_page_score": 0.76},
+    {"name": "Jamendo", "enabled": false, "max_variants": 2},
+    {"name": "Pixabay Music", "enabled": false, "max_variants": 2}
   ],
   "csv_report": true,
   "xlsx_report": true
@@ -216,17 +231,17 @@ Generated at `~/.config/legal-music/config.json`:
 | `delay` | 0.25s | Pause between requests (increase if rate-limited) |
 | `max_results` | 5 | Results per source per query |
 | `timeout` | 10s | HTTP request timeout |
-| `per_song_timeout` | 16s | Max time to search one song (balanced mode) |
-| `phase_a_budget_ratio` | 0.70 | Fraction of budget reserved for fast high-value pass |
+| `per_song_timeout` | 18s | Max time to search one song (balanced mode) |
+| `phase_a_budget_ratio` | 0.76 | Fraction of budget reserved for the high-value IA/FMA pass |
 | `min_downloadable_score` | 0.46 | Threshold for "download available" status |
 | `min_page_score` | 0.50 | Threshold for "page found" status |
 | `cache_enabled` | true | Reuse query results within a run |
-| `persistent_cache_enabled` | false | Reuse results across runs |
+| `persistent_cache_enabled` | true | Reuse strong query/inspect results across runs |
 | `source_preset` | balanced | Source profile: `balanced`, `maximize`, or `custom` |
 
 **source_preset values**:
-- `balanced`: Internet Archive + Free Music Archive + Bandcamp (fast, practical)
-- `maximize`: All sources enabled (more thorough, slower)
+- `balanced`: Internet Archive + Free Music Archive first, then bounded Bandcamp rescue
+- `maximize`: Internet Archive + Free Music Archive first, then Bandcamp + Jamendo + Pixabay rescue
 - `custom`: Use current source enable/disable settings
 
 **Tuning for conditions**:
@@ -238,7 +253,7 @@ Generated at `~/.config/legal-music/config.json`:
 
 *More recall needed*:
 ```json
-{"max_results": 7, "per_song_timeout": 24, "maximize_query_variants": 8}
+{"max_results": 7, "per_song_timeout": 26, "maximize_query_variants": 6}
 ```
 
 *Rate-limited*:
@@ -275,7 +290,7 @@ Unhealthy sources are skipped for the rest of the run, but the thresholds are tu
 
 ### 2. Per-song time budget
 
-Each song has a bounded search budget (16s balanced by default, 8s in fast mode, 24s in maximize mode). The engine spends most songs in a short high-value phase first, then only expands when needed. This prevents:
+Each song has a bounded search budget (18s balanced by default, 8s in fast mode, 26s in maximize mode). The engine spends most songs in a high-value Phase A first, then only expands into bounded rescue when needed. In balanced mode, Phase A favors Internet Archive and Free Music Archive recall-per-second, and Phase B is Bandcamp-only rescue. This prevents:
 - One failing song freezing the entire playlist
 - Network outages from stalling for minutes
 - User wondering if the tool is hung
@@ -304,14 +319,14 @@ The engine keeps run-level memory for:
 - inspected URLs that already yielded useful matches
 - redundant attempts that can be skipped safely
 
-If `persistent_cache_enabled` is turned on, strong cached results can also be reused across runs.
+Persistent cache is enabled by default, so strong cached results can also be reused across runs.
 
 ### 6. Priority defaults
 
 Sources start in this order:
 1. Internet Archive (most reliable, native API)
-2. Free Music Archive (artist-permitted catalog + fallback)
-3. Bandcamp (strict page-based fallback)
+2. Free Music Archive (artist-permitted catalog + strong Phase A recall)
+3. Bandcamp (strict page-based rescue in balanced mode)
 4. Jamendo (optional, off by default)
 5. Pixabay (native music search + fallback)
 
@@ -346,11 +361,14 @@ legal-music batch-dry --fast ~/playlists/
 ### Maximize recall
 
 ```bash
-# Smart maximize: better variants, adaptive ordering, broader fallback
+# Smart maximize: broader fallback while keeping Phase A focused on IA/FMA
 legal-music dry --maximize my_songs.txt
 
 # Maximize recall across a directory of playlists
 legal-music batch-dry --maximize ~/playlists/
+
+# Or use the repo wrapper for all playlists under ./playlists
+./run_playlists.sh --maximize
 ```
 
 ### Tuning for slow conditions
@@ -378,6 +396,10 @@ legal-music batch-dl ~/playlists/
 
 # Fast check all
 legal-music batch-dry --fast ~/playlists/
+
+# Repo-local wrapper: process every playlists/*.txt to output/<playlist>/
+./run_playlists.sh
+./run_playlists.sh --download
 ```
 
 ---

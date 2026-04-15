@@ -1,0 +1,7 @@
+#!/bin/bash
+if pgrep -f telegram_bot.py > /dev/null; then
+    pkill -f telegram_bot.py
+    echo "🛑 Bot dayandırıldı"
+else
+    echo "⚠️  Bot işləmir"
+fi

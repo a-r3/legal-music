@@ -1,0 +1,12 @@
+#!/bin/bash
+BOT_DIR="/home/oem/Documents/01_Projects/legal-music"
+LOG="$BOT_DIR/output/bot.log"
+
+if pgrep -f telegram_bot.py > /dev/null; then
+    echo "⚠️  Bot artıq işləyir"
+    exit 0
+fi
+
+mkdir -p "$BOT_DIR/output"
+nohup python3 "$BOT_DIR/telegram_bot.py" >> "$LOG" 2>&1 &
+echo "✅ Bot başladı (PID: $!)"

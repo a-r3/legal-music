@@ -95,12 +95,19 @@ except ImportError:
 
 BOT_TOKEN: str  = os.getenv("BOT_TOKEN", "")
 CHANNEL_ID: str = os.getenv("CHANNEL_ID", "")
-DOWNLOADS_DIR   = default_output_dir() / "bot_downloads"
+DOWNLOADS_DIR   = Path(os.getenv("DOWNLOADS_DIR", str(default_output_dir() / "bot_downloads")))
 DB_PATH         = default_data_dir() / "cache" / "bot_cache.db"
+
+# SAVE_LOCAL=true  → yüklənmiş fayllar cihazda saxlanılır (default)
+# SAVE_LOCAL=false → Telegram-a göndərildikdən sonra fayllar silinir
+SAVE_LOCAL: bool = os.getenv("SAVE_LOCAL", "true").strip().lower() != "false"
 
 if not BOT_TOKEN:
     logger.error("BOT_TOKEN tapılmadı. .env faylını yoxlayın.")
     sys.exit(1)
+
+logger.info("Yüklənmiş fayllar: %s | Yerli saxlama: %s",
+            DOWNLOADS_DIR, "aktiv" if SAVE_LOCAL else "deaktiv")
 
 _URL_RE      = re.compile(r"https?://[^\s]+|www\.[^\s]+|youtu\.be/[^\s]+", re.IGNORECASE)
 _SEP_RE      = re.compile(r"\s*[/|,–—]\s*|\s+by\s+|\s*:\s*", re.IGNORECASE)
@@ -212,6 +219,14 @@ async def _send_audio(
         cid = reply_update.effective_chat.id
         if str(cid) != str(CHANNEL_ID):
             await _one(cid)
+
+    # SAVE_LOCAL=false olduqda göndərildikdən sonra faylı sil
+    if not SAVE_LOCAL:
+        try:
+            file_path.unlink(missing_ok=True)
+            logger.debug("Fayl silindi (SAVE_LOCAL=false): %s", file_path.name)
+        except Exception as exc:
+            logger.warning("Fayl silinmədi: %s", exc)
 
 
 # ---------------------------------------------------------------------------
@@ -501,7 +516,9 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     try:
         DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
-        dest  = DOWNLOADS_DIR / "url_download"
+        # Hər URL üçün unikal qovluq (üst-üstə yazılmasın)
+        ts   = datetime.now().strftime("%Y%m%d_%H%M%S")
+        dest = DOWNLOADS_DIR / f"url_{ts}"
         saved = await asyncio.get_event_loop().run_in_executor(
             None, lambda: download_via_ytdlp(url, dest)
         )

@@ -18,6 +18,9 @@ SOURCE_CONFIDENCE = {
     "Free Music Archive": 0.06,
     "Jamendo": 0.07,
     "Pixabay Music": 0.06,
+    "CCMixter": 0.07,
+    "Incompetech": 0.07,
+    "YouTube Audio Library": 0.05,
 }
 
 BANDCAMP_LOW_VALUE_WORDS = {

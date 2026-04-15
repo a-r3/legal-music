@@ -5,10 +5,8 @@ from dataclasses import dataclass
 
 from ..utils import (
     _has_cyrillic_or_turkic,
-    normalize_song,
     normalize_space,
     parse_artist_title,
-    strip_accents,
     strip_bracket_noise,
     strip_feature_suffix,
     strip_mix_suffix,
@@ -30,17 +28,18 @@ def _quoted(*parts: str) -> str:
 
 
 def build_query_variants(song: str) -> list[QueryVariant]:
-    """Build a controlled set of useful query variants ordered by precision."""
+    """Build a compact set of high-value query variants.
+
+    Supported variants are intentionally limited to the small set the engine
+    actively reasons about across balanced and maximize modes:
+    `artist_title`, `title_quoted`, `translit_artist_title`, `translit_raw`,
+    `artist_title_quoted`, and `title_only`.
+    """
     raw = normalize_space(song)
     artist, title = parse_artist_title(raw)
     title = normalize_space(strip_bracket_noise(title))
     artist = normalize_space(strip_feature_suffix(artist))
     title_core = normalize_space(strip_mix_suffix(strip_feature_suffix(title)))
-    full_core = normalize_space(" - ".join(part for part in [artist, title_core] if part))
-    full_plain = normalize_space(" - ".join(part for part in [artist, title] if part))
-    norm_full = normalize_song(full_plain or raw)
-    accent_title = normalize_space(strip_accents(title_core or title))
-
     variants: list[QueryVariant] = []
 
     def add(query: str, kind: str, *, fallback: bool = False) -> None:
@@ -57,22 +56,14 @@ def build_query_variants(song: str) -> list[QueryVariant]:
             )
         )
 
-    add(raw, "raw")
-    add(f'"{raw}"', "raw_quoted")
     if artist and title:
         add(f"{artist} {title}", "artist_title")
         add(_quoted(artist, title), "artist_title_quoted")
-    if full_core and full_core not in {raw, full_plain}:
-        add(full_core, "artist_title_core")
-    if norm_full and norm_full not in {raw.casefold(), full_core.casefold()}:
-        add(norm_full, "normalized_full")
+        add(f"{title} {artist}", "title_artist", fallback=True)
     if title:
         add(title, "title_only", fallback=True)
         add(f'"{title}"', "title_quoted", fallback=True)
-    if title_core and title_core.casefold() != title.casefold():
-        add(title_core, "title_core", fallback=True)
-    if accent_title and accent_title.casefold() not in {title.casefold(), title_core.casefold()}:
-        add(accent_title, "accent_folded_title", fallback=True)
+        add(f"{title} instrumental", "title_instrumental", fallback=True)
 
     # Add transliterated variants if the input contains Cyrillic or Turkic characters
     if _has_cyrillic_or_turkic(raw):

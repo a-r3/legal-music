@@ -16,9 +16,10 @@ class TestAppConfig:
         assert cfg.balanced_query_variants >= cfg.fast_query_variants
         assert cfg.source_preset == "balanced"
         assert cfg.configured_source_names() == ["Internet Archive", "Free Music Archive", "Bandcamp"]
-        assert cfg.phase_a_budget_ratio == 0.70
+        assert cfg.phase_a_budget_ratio == 0.76
         assert cfg.min_page_score == 0.50
         assert cfg.min_best_seen_score == 0.50
+        assert cfg.persistent_cache_enabled is True
 
     def test_validate_ok(self):
         cfg = AppConfig()
@@ -59,7 +60,8 @@ class TestAppConfig:
             loaded = AppConfig.load(path)
             assert loaded.delay == cfg.delay
             assert loaded.max_results == cfg.max_results
-            assert len(loaded.sources) == len(cfg.sources)
+            # After migration, new opt-in sources are added so loaded may have more
+            assert len(loaded.sources) >= len(cfg.sources)
             assert loaded.source_priority == cfg.source_priority
             assert loaded.persistent_cache_enabled is True
             assert loaded.phase_a_budget_ratio == 0.6
@@ -87,17 +89,16 @@ class TestAppConfig:
         cfg = AppConfig()
         cfg.apply_maximize_mode()
         assert cfg.maximize_mode is True
-        assert cfg.per_song_timeout >= 24
+        assert cfg.per_song_timeout >= 26
         assert cfg.maximize_query_variants >= cfg.balanced_query_variants
-        assert 0.5 <= cfg.phase_a_budget_ratio <= 0.7
+        assert 0.78 <= cfg.phase_a_budget_ratio <= 0.82
         assert cfg.configured_source_names() == ["Internet Archive", "Free Music Archive", "Bandcamp"]
-        assert cfg.enabled_source_names() == [
-            "Internet Archive",
-            "Free Music Archive",
-            "Bandcamp",
-            "Jamendo",
-            "Pixabay Music",
-        ]
+        maximize_enabled = cfg.enabled_source_names()
+        for name in ["Internet Archive", "Free Music Archive", "Bandcamp", "Jamendo", "Pixabay Music"]:
+            assert name in maximize_enabled
+        # New sources also included in maximize preset
+        for name in ["CCMixter", "Incompetech", "YouTube Audio Library"]:
+            assert name in maximize_enabled
 
     def test_validate_bad_phase_ratio(self):
         cfg = AppConfig(phase_a_budget_ratio=1.2)
@@ -134,16 +135,12 @@ class TestAppConfig:
 
         assert cfg.source_preset == "balanced"
         assert cfg.configured_source_names() == ["Internet Archive", "Free Music Archive", "Bandcamp"]
-        assert [source.name for source in cfg.sources] == [
-            "Internet Archive",
-            "Free Music Archive",
-            "Bandcamp",
-            "Jamendo",
-            "Pixabay Music",
-        ]
+        source_names = [source.name for source in cfg.sources]
+        for name in ["Internet Archive", "Free Music Archive", "Bandcamp", "Jamendo", "Pixabay Music"]:
+            assert name in source_names
         assert cfg.find_source("Jamendo").enabled is False
         assert cfg.find_source("Pixabay").enabled is False
-        assert cfg.phase_a_budget_ratio == 0.70
+        assert cfg.phase_a_budget_ratio == 0.76
         assert cfg.min_page_score == 0.50
         assert cfg.min_best_seen_score == 0.50
         assert cfg.max_results == 5
@@ -175,10 +172,8 @@ class TestAppConfig:
 
         cfg.apply_maximize_mode()
         maximize_sources = build_sources(cfg, build_session(cfg))
-        assert [source.name for source in maximize_sources] == [
-            "Internet Archive",
-            "Free Music Archive",
-            "Bandcamp",
-            "Jamendo",
-            "Pixabay Music",
-        ]
+        maximize_names = [source.name for source in maximize_sources]
+        for name in ["Internet Archive", "Free Music Archive", "Bandcamp", "Jamendo", "Pixabay Music"]:
+            assert name in maximize_names
+        for name in ["CCMixter", "Incompetech", "YouTube Audio Library"]:
+            assert name in maximize_names

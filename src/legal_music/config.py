@@ -12,10 +12,8 @@ from .constants import (
     DEFAULT_EARLY_EXIT_SCORE,
     DEFAULT_FALLBACK_POLICY,
     DEFAULT_PER_SONG_TIMEOUT,
-    DEFAULT_QUERY_VARIANTS,
     DEFAULT_UNHEALTHY_AFTER_TIMEOUTS,
     FAST_QUERY_VARIANTS,
-    MAXIMIZE_QUERY_VARIANTS,
 )
 from .utils import default_data_dir, default_output_dir, default_playlists_dir
 
@@ -23,7 +21,7 @@ from .utils import default_data_dir, default_output_dir, default_playlists_dir
 # Source presets
 # ---------------------------------------------------------------------------
 
-CONFIG_VERSION = 4
+CONFIG_VERSION = 5
 DEFAULT_SOURCE_PRESET = "balanced"
 CUSTOM_SOURCE_PRESET = "custom"
 LEGACY_PHASE_A_BUDGET_RATIO = 0.78
@@ -36,12 +34,28 @@ ALL_SOURCE_NAMES: list[str] = [
     "Bandcamp",
     "Jamendo",
     "Pixabay Music",
+    "CCMixter",
+    "Incompetech",
+    "YouTube Audio Library",
+]
+
+# "Core" sources that existed before v2.3.  A config is considered complete
+# (and therefore can reliably infer its preset) if it has at least these.
+_CORE_SOURCE_NAMES: list[str] = [
+    "Internet Archive",
+    "Free Music Archive",
+    "Bandcamp",
+    "Jamendo",
+    "Pixabay Music",
 ]
 
 SOURCE_PRESETS: dict[str, list[str]] = {
     "fast": ["Internet Archive"],
     "balanced": ["Internet Archive", "Free Music Archive", "Bandcamp"],
-    "maximize": ["Internet Archive", "Free Music Archive", "Bandcamp", "Jamendo", "Pixabay Music"],
+    "maximize": [
+        "Internet Archive", "Free Music Archive", "Bandcamp",
+        "Jamendo", "Pixabay Music", "CCMixter", "Incompetech", "YouTube Audio Library",
+    ],
 }
 
 
@@ -51,11 +65,14 @@ def _default_source_priority() -> list[str]:
 
 def _default_sources() -> list[SourceConfig]:
     return [
-        SourceConfig("Internet Archive"),
-        SourceConfig("Free Music Archive"),
-        SourceConfig("Bandcamp"),
-        SourceConfig("Jamendo", enabled=False),
-        SourceConfig("Pixabay Music", enabled=False),
+        SourceConfig("Internet Archive", max_variants=5),
+        SourceConfig("Free Music Archive", max_variants=4),
+        SourceConfig("Bandcamp", max_variants=1, min_page_score=0.76),
+        SourceConfig("Jamendo", enabled=False, max_variants=2),
+        SourceConfig("Pixabay Music", enabled=False, max_variants=2),
+        SourceConfig("CCMixter", enabled=False, max_variants=3),
+        SourceConfig("Incompetech", enabled=False, max_variants=3),
+        SourceConfig("YouTube Audio Library", enabled=False, max_variants=3),
     ]
 
 
@@ -90,8 +107,8 @@ class AppConfig:
     timeout: int = 10
     retry_count: int = 1
     backoff: float = 1.0
-    per_song_timeout: int = 16
-    phase_a_budget_ratio: float = 0.70
+    per_song_timeout: int = 18
+    phase_a_budget_ratio: float = 0.76
 
     # Scoring
     min_downloadable_score: float = 0.46
@@ -102,14 +119,14 @@ class AppConfig:
     # Runtime behavior
     fast_mode: bool = False
     maximize_mode: bool = False
-    balanced_query_variants: int = DEFAULT_QUERY_VARIANTS
+    balanced_query_variants: int = 5
     fast_query_variants: int = FAST_QUERY_VARIANTS
-    maximize_query_variants: int = MAXIMIZE_QUERY_VARIANTS
+    maximize_query_variants: int = 6
     fallback_policy: str = DEFAULT_FALLBACK_POLICY
     adaptive_source_ordering: bool = True
     adaptive_queries: bool = True
     cache_enabled: bool = True
-    persistent_cache_enabled: bool = False
+    persistent_cache_enabled: bool = True
     cache_file: Path = field(default_factory=lambda: default_data_dir() / "cache" / "search_cache.json")
 
     # Health thresholds
@@ -221,7 +238,9 @@ class AppConfig:
         ]
         loaded_version = int(data.get("config_version", 0))
         source_names = {source.name for source in raw_sources}
-        complete_source_list = all(name in source_names for name in ALL_SOURCE_NAMES)
+        # A config is "complete" when it contains all *core* sources.
+        # New opt-in sources are filled in by migration regardless.
+        complete_source_list = all(name in source_names for name in _CORE_SOURCE_NAMES)
         source_preset = str(data.get("source_preset", "")).strip().lower()
         migration_applied = False
 
@@ -268,22 +287,22 @@ class AppConfig:
             timeout=int(data.get("timeout", 10)),
             retry_count=int(data.get("retry_count", 1)),
             backoff=float(data.get("backoff", 1.0)),
-            per_song_timeout=int(data.get("per_song_timeout", DEFAULT_PER_SONG_TIMEOUT + 6)),
-            phase_a_budget_ratio=float(data.get("phase_a_budget_ratio", 0.70)),
+            per_song_timeout=int(data.get("per_song_timeout", DEFAULT_PER_SONG_TIMEOUT + 8)),
+            phase_a_budget_ratio=float(data.get("phase_a_budget_ratio", 0.76)),
             min_downloadable_score=float(data.get("min_downloadable_score", 0.46)),
             min_page_score=float(data.get("min_page_score", 0.50)),
             min_best_seen_score=float(data.get("min_best_seen_score", 0.50)),
             early_exit_score=float(data.get("early_exit_score", DEFAULT_EARLY_EXIT_SCORE)),
             fast_mode=bool(data.get("fast_mode", False)),
             maximize_mode=bool(data.get("maximize_mode", False)),
-            balanced_query_variants=int(data.get("balanced_query_variants", DEFAULT_QUERY_VARIANTS)),
+            balanced_query_variants=int(data.get("balanced_query_variants", 5)),
             fast_query_variants=int(data.get("fast_query_variants", FAST_QUERY_VARIANTS)),
-            maximize_query_variants=int(data.get("maximize_query_variants", MAXIMIZE_QUERY_VARIANTS)),
+            maximize_query_variants=int(data.get("maximize_query_variants", 6)),
             fallback_policy=str(data.get("fallback_policy", DEFAULT_FALLBACK_POLICY)),
             adaptive_source_ordering=bool(data.get("adaptive_source_ordering", True)),
             adaptive_queries=bool(data.get("adaptive_queries", True)),
             cache_enabled=bool(data.get("cache_enabled", True)),
-            persistent_cache_enabled=bool(data.get("persistent_cache_enabled", False)),
+            persistent_cache_enabled=bool(data.get("persistent_cache_enabled", True)),
             cache_file=Path(data.get("cache_file", str(default_data_dir() / "cache" / "search_cache.json"))),
             degraded_after_timeouts=int(data.get("degraded_after_timeouts", DEFAULT_DEGRADED_AFTER_TIMEOUTS)),
             unhealthy_after_timeouts=int(data.get("unhealthy_after_timeouts", DEFAULT_UNHEALTHY_AFTER_TIMEOUTS)),
@@ -297,7 +316,7 @@ class AppConfig:
         cfg.normalize_sources()
         if loaded_version < CONFIG_VERSION:
             if abs(cfg.phase_a_budget_ratio - LEGACY_PHASE_A_BUDGET_RATIO) < 1e-9:
-                cfg.phase_a_budget_ratio = 0.70
+                cfg.phase_a_budget_ratio = 0.76
                 migration_applied = True
             if abs(cfg.min_page_score - LEGACY_MIN_PAGE_SCORE) < 1e-9:
                 cfg.min_page_score = 0.50
@@ -374,6 +393,7 @@ class AppConfig:
         self.timeout = 5
         self.retry_count = 0
         self.per_song_timeout = 8
+        self.phase_a_budget_ratio = min(self.phase_a_budget_ratio, 0.72)
         self.min_page_score = max(self.min_page_score, 0.52)
         self.min_best_seen_score = max(self.min_best_seen_score, 0.50)
 
@@ -385,9 +405,9 @@ class AppConfig:
         self.max_results = max(self.max_results, 7)
         self.timeout = max(self.timeout, 12)
         self.retry_count = max(self.retry_count, 1)
-        self.per_song_timeout = max(self.per_song_timeout, 24)
-        self.phase_a_budget_ratio = min(max(self.phase_a_budget_ratio, 0.62), 0.70)
-        self.maximize_query_variants = max(self.maximize_query_variants, MAXIMIZE_QUERY_VARIANTS)
+        self.per_song_timeout = max(self.per_song_timeout, 26)
+        self.phase_a_budget_ratio = min(max(self.phase_a_budget_ratio, 0.78), 0.82)
+        self.maximize_query_variants = max(self.maximize_query_variants, 6)
         self.min_page_score = min(self.min_page_score, 0.44)
         self.min_best_seen_score = min(self.min_best_seen_score, 0.35)
         self.early_exit_score = max(self.early_exit_score, 0.98)

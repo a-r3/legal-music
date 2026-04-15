@@ -14,10 +14,13 @@ from ..models import ResultTier, SearchResult, SongStatus
 from ..search.queries import QueryVariant, build_query_variants
 from ..search.sources import (
     BandcampSource,
+    CCMixterSource,
     FreeMusicArchiveSource,
+    IncompetechSource,
     InternetArchiveSource,
     JamendoSource,
     PixabaySource,
+    YouTubeAudioLibrarySource,
 )
 from .base import SourceAdapter
 from .health import RunContext, SourceHealth
@@ -29,65 +32,80 @@ _SOURCE_REGISTRY: dict[str, type[SourceAdapter]] = {
     "Free Music Archive": FreeMusicArchiveSource,
     "Jamendo": JamendoSource,
     "Pixabay Music": PixabaySource,
+    "CCMixter": CCMixterSource,
+    "Incompetech": IncompetechSource,
+    "YouTube Audio Library": YouTubeAudioLibrarySource,
 }
 
 _SOURCE_QUERY_ORDER: dict[str, list[str]] = {
     "Internet Archive": [
         "artist_title",
-        "translit_artist_title",
         "title_quoted",
+        "translit_artist_title",
         "artist_title_quoted",
         "translit_raw",
         "raw_quoted",
-        "title_core",
         "title_only",
-        "artist_title_core",
-        "normalized_full",
     ],
     "Bandcamp": [
         "artist_title",
         "artist_title_quoted",
         "title_quoted",
         "translit_artist_title",
-        "title_core",
         "title_only",
-        "artist_title_core",
         "raw_quoted",
     ],
     "Free Music Archive": [
         "artist_title",
-        "translit_artist_title",
         "title_quoted",
-        "translit_raw",
+        "translit_artist_title",
         "artist_title_quoted",
+        "translit_raw",
         "title_only",
-        "title_core",
-        "artist_title_core",
-        "normalized_full",
     ],
     "Jamendo": [
         "artist_title",
         "artist_title_quoted",
         "title_quoted",
         "translit_artist_title",
-        "title_core",
         "title_only",
-        "normalized_full",
+        "raw_quoted",
     ],
     "Pixabay Music": [
         "title_quoted",
         "title_only",
         "artist_title",
-        "title_core",
+        "raw_quoted",
+    ],
+    "CCMixter": [
+        "title_artist",
+        "title_only",
+        "artist_title",
+        "title_quoted",
+        "title_instrumental",
+    ],
+    "Incompetech": [
+        "title_only",
+        "title_quoted",
+        "artist_title",
+        "title_instrumental",
+    ],
+    "YouTube Audio Library": [
+        "artist_title",
+        "title_artist",
+        "title_only",
+        "title_instrumental",
     ],
 }
 
 _PRIMARY_SOURCES = {"Internet Archive"}
 _SECONDARY_SOURCES = {"Free Music Archive"}
 _SELECTIVE_FALLBACK_SOURCES = {"Bandcamp"}
-_OPT_IN_SOURCES = {"Jamendo", "Pixabay Music"}
+_OPT_IN_SOURCES = {"Jamendo", "Pixabay Music", "CCMixter", "Incompetech", "YouTube Audio Library"}
 _DOWNLOAD_FIRST_SOURCES = _PRIMARY_SOURCES | _SECONDARY_SOURCES | {"Jamendo"}
 _PAGE_HEAVY_SOURCES = _SELECTIVE_FALLBACK_SOURCES
+_PHASE_B_BALANCED_SOURCES = {"Bandcamp"}
+_PHASE_B_MAXIMIZE_SOURCES = {"Bandcamp", "Jamendo", "Pixabay Music", "CCMixter", "Incompetech", "YouTube Audio Library"}
 _PHASE_A_ZERO_RESULT_EXIT: dict[str, int] = {
     "Internet Archive": 2,
     "Free Music Archive": 2,
@@ -157,6 +175,7 @@ class SearchEngine:
         self.inspect_cache: dict[str, SearchResult] = {}
         self.persistent_cache: dict[str, dict[str, object]] = {"queries": {}, "inspects": {}}
         self.phase_metrics = self._empty_phase_metrics()
+        self._song_cache_hits = 0
         self._load_persistent_cache()
 
     def set_run_context(self, total_songs: int) -> None:
@@ -180,6 +199,7 @@ class SearchEngine:
     def search_song(self, song: str) -> SearchResult:
         """Search a song using a fast high-value pass, then selective expansion."""
         song_start = time.time()
+        self._song_cache_hits = 0
         profile = classify_song(song)
         variants = build_query_variants(song)
         variant_limit = self._variant_limit()
@@ -191,39 +211,21 @@ class SearchEngine:
         seen_urls: set[str] = set()
         seen_queries_by_source: dict[str, set[str]] = defaultdict(set)
 
-        phase_plan = [("phase_a", phase_a_budget), ("phase_b", self.cfg.per_song_timeout)]
+        phase_b_budget = self.cfg.per_song_timeout * (0.38 if self.cfg.maximize_mode else 0.28)
+        phase_plan = [("phase_a", phase_a_budget), ("phase_b", phase_b_budget)]
 
         for phase_name, phase_budget in phase_plan:
             if self._budget_exceeded(song_start):
                 break
             if phase_name == "phase_b":
-                # Skip Phase B if we have strong enough results already
-                # Use early_exit_score to determine if we should attempt phase_b
-                if best_downloadable and best_downloadable.score >= self.cfg.early_exit_score:
-                    # Strong downloadable match found - skip expensive phase B
+                # Phase B is rescue-only. If Phase A already produced an
+                # accepted downloadable or page result, skip rescue entirely.
+                if best_downloadable or best_page:
                     break
-                if best_downloadable:
-                    # Downloadable found but score below early_exit threshold
-                    # In balanced mode, try phase B only if score is weak
-                    if not self.cfg.maximize_mode and best_downloadable.score < 0.60:
-                        pass  # Continue to phase B to try to improve
-                    elif self.cfg.maximize_mode:
-                        pass  # Maximize mode always tries phase B for better matches
-                    else:
-                        # Balanced mode with moderate score - skip phase B
-                        break
-                
-                if best_page and best_page.result_tier == ResultTier.TIER_2_STRONG_PAGE:
-                    # In balanced mode, stop with strong page; in maximize, try for better
-                    if not self.cfg.maximize_mode:
-                        break
-                
-                # Skip Phase B if nothing useful found AND time pressure is high
-                # This prevents wasting time on songs unlikely to be found
+
                 time_spent = time.time() - song_start
                 time_remaining = self.cfg.per_song_timeout - time_spent
-                if not best_seen and time_remaining < 2.0 and not self.cfg.maximize_mode:
-                    # Not enough time left and nothing found yet - unlikely to recover
+                if time_remaining < (3.0 if self.cfg.maximize_mode else 2.5):
                     break
 
             phase_started = time.time()
@@ -234,6 +236,7 @@ class SearchEngine:
                 variants=variants,
                 variant_limit=variant_limit,
                 song_start=song_start,
+                phase_start=phase_started,
                 phase_budget=phase_budget,
                 seen_urls=seen_urls,
                 seen_queries_by_source=seen_queries_by_source,
@@ -250,15 +253,15 @@ class SearchEngine:
                 break
 
         if best_downloadable:
-            return best_downloadable
+            return self._finalize_result(best_downloadable)
         if best_page:
-            return best_page
+            return self._finalize_result(best_page)
         if best_seen and self.cfg.fallback_policy == "page_or_best_seen" and self._good_enough_best_seen(best_seen):
             best_seen.status = SongStatus.PAGE_FOUND
             best_seen.note = f"{best_seen.note} Rescued by fallback."
             best_seen.fallback_used = True
-            return best_seen
-        return SearchResult.not_found(song, best_seen=best_seen)
+            return self._finalize_result(best_seen)
+        return self._finalize_result(SearchResult.not_found(song, best_seen=best_seen))
 
     def _variant_limit(self) -> int:
         if self.cfg.fast_mode:
@@ -297,6 +300,7 @@ class SearchEngine:
         variants: list[QueryVariant],
         variant_limit: int,
         song_start: float,
+        phase_start: float,
         phase_budget: float,
         seen_urls: set[str],
         seen_queries_by_source: dict[str, set[str]],
@@ -305,7 +309,7 @@ class SearchEngine:
         best_seen: SearchResult | None,
     ) -> dict[str, SearchResult | None]:
         for source in self._ordered_sources(profile, phase_name):
-            if self._budget_exceeded(song_start) or self._phase_budget_exceeded(song_start, phase_budget):
+            if self._budget_exceeded(song_start) or self._phase_budget_exceeded(phase_start, phase_budget):
                 break
             if not self._should_try_source(
                 source.name,
@@ -332,7 +336,7 @@ class SearchEngine:
 
             leading_zero_result_attempts = 0
             for variant in source_variants:
-                if self._budget_exceeded(song_start) or self._phase_budget_exceeded(song_start, phase_budget):
+                if self._budget_exceeded(song_start) or self._phase_budget_exceeded(phase_start, phase_budget):
                     break
                 if variant.query.casefold() in seen_queries_by_source[source.name]:
                     self.run_context.record_redundant_skip(source.name, variant.kind)
@@ -355,7 +359,7 @@ class SearchEngine:
                 leading_zero_result_attempts = 0
 
                 for url in urls:
-                    if self._budget_exceeded(song_start) or self._phase_budget_exceeded(song_start, phase_budget):
+                    if self._budget_exceeded(song_start) or self._phase_budget_exceeded(phase_start, phase_budget):
                         break
                     if url in seen_urls:
                         self.run_context.record_redundant_skip(source.name, variant.kind)
@@ -463,7 +467,7 @@ class SearchEngine:
                 return False
             if phase_name == "phase_a":
                 return source_name in (_PRIMARY_SOURCES | _SECONDARY_SOURCES)
-            if source_name in _SELECTIVE_FALLBACK_SOURCES:
+            if source_name in _PHASE_B_BALANCED_SOURCES:
                 return self._should_try_bandcamp(
                     profile=profile,
                     song_start=song_start,
@@ -471,11 +475,11 @@ class SearchEngine:
                     best_page=best_page,
                     best_seen=best_seen,
                 )
-            return source_name in (_PRIMARY_SOURCES | _SECONDARY_SOURCES)
-
-        if phase_name == "phase_a" and source_name in _PAGE_HEAVY_SOURCES:
             return False
-        return True
+
+        if phase_name == "phase_a":
+            return source_name not in _PAGE_HEAVY_SOURCES
+        return source_name in _PHASE_B_MAXIMIZE_SOURCES
 
     def _should_try_bandcamp(
         self,
@@ -490,6 +494,8 @@ class SearchEngine:
             return True
         if best_downloadable is not None:
             return False
+        if best_page is not None:
+            return False
 
         time_remaining = self.cfg.per_song_timeout - (time.time() - song_start)
         if time_remaining < max(4.0, self.cfg.per_song_timeout * 0.22):
@@ -499,11 +505,8 @@ class SearchEngine:
         if metric and metric.page_found_count >= 2 and metric.downloaded_count == 0 and metric.low_value_page_ratio >= 0.75:
             return False
 
-        if best_page and best_page.source in (_PRIMARY_SOURCES | _SECONDARY_SOURCES):
-            return False
-
         if best_seen and best_seen.source in (_PRIMARY_SOURCES | _SECONDARY_SOURCES):
-            if best_seen.score >= max(self.cfg.min_best_seen_score + 0.08, 0.58):
+            if best_seen.score >= max(self.cfg.min_best_seen_score + 0.04, 0.56):
                 return False
 
         if profile.is_classical or profile.is_instrumental or profile.is_soundtrack or profile.is_electronic:
@@ -511,8 +514,11 @@ class SearchEngine:
         if profile.has_accents or profile.has_non_ascii:
             return True
         if best_seen is None:
-            return time_remaining >= max(6.0, self.cfg.per_song_timeout * 0.35)
-        return True
+            return False
+        return (
+            best_seen.source == "Bandcamp"
+            or best_seen.score >= max(self.cfg.min_best_seen_score + 0.10, 0.64)
+        )
 
     def _source_profile_bias(self, source_name: str, profile: SongProfile) -> float:
         bias = 0.0
@@ -555,11 +561,13 @@ class SearchEngine:
         if self.cfg.maximize_mode and profile.is_classical:
             limit = min(len(variants), limit + 1)
         if source_name in _PAGE_HEAVY_SOURCES and not self.cfg.maximize_mode:
-            limit = min(limit, 2)
+            limit = min(limit, 1)
         if phase_name == "phase_a":
             if self.cfg.maximize_mode:
-                limit = min(limit, 2 if source_name in _DOWNLOAD_FIRST_SOURCES else 1)
+                limit = min(limit, 3 if source_name in _DOWNLOAD_FIRST_SOURCES else 1)
             elif source_name == "Internet Archive":
+                # Balanced Phase A is intentionally compact but must still reach
+                # the high-value transliteration path for non-ASCII songs.
                 limit = min(limit, 3)
             elif source_name == "Free Music Archive":
                 limit = min(limit, 2)
@@ -568,11 +576,11 @@ class SearchEngine:
         else:
             if not self.cfg.maximize_mode:
                 if source_name == "Internet Archive":
-                    limit = min(limit, 4)
-                elif source_name == "Free Music Archive":
                     limit = min(limit, 3)
-                else:
+                elif source_name == "Free Music Archive":
                     limit = min(limit, 2)
+                else:
+                    limit = min(limit, 1)
             if source_name in _PAGE_HEAVY_SOURCES:
                 limit = min(limit, 1 if not self.cfg.maximize_mode else 2)
 
@@ -581,17 +589,67 @@ class SearchEngine:
 
         def sort_key(item: QueryVariant) -> tuple[float, float]:
             base = float(ranking.get(item.kind, len(ranking)))
-            # Reduce fallback penalty: title searches in Phase A are high-recall, not truly fallback
-            fallback_penalty = 0.10 if item.is_fallback and phase_name == "phase_a" and item.kind.startswith("title") else 0.18 if item.is_fallback else 0.0
+            # Title and transliterated artist/title variants are intentionally kept
+            # competitive in Phase A because they carry the best recall gains for IA/FMA.
+            if item.kind == "translit_artist_title":
+                fallback_penalty = 0.0
+            elif item.is_fallback and phase_name == "phase_a" and item.kind in {"title_only", "title_quoted"}:
+                fallback_penalty = 0.04
+            elif item.is_fallback:
+                fallback_penalty = 0.16
+            else:
+                fallback_penalty = 0.0
             learned = 0.0
             if self.cfg.adaptive_queries and metrics is not None:
-                learned -= metrics.query_usefulness(item.kind) * (1.2 if phase_name == "phase_a" else 0.8)
+                learned -= metrics.query_usefulness(item.kind) * (1.0 if phase_name == "phase_a" else 0.8)
                 query_metric = metrics.query_metrics.get(item.kind)
                 if query_metric and query_metric.attempts >= 2 and query_metric.zero_results == query_metric.attempts:
-                    learned += 0.45
+                    learned += 0.18 if phase_name == "phase_a" else 0.35
             return (base + fallback_penalty + self._query_profile_bias(item.kind, profile) + learned, len(item.query))
 
-        return sorted(variants, key=sort_key)[:limit]
+        selected = sorted(variants, key=sort_key)[:limit]
+
+        # Non-ASCII songs need transliteration to remain reachable inside the
+        # tight balanced Phase A caps. IA can carry all top 3 high-value
+        # variants; FMA keeps artist_title + translit_artist_title when capped at 2.
+        if (
+            phase_name == "phase_a"
+            and not self.cfg.maximize_mode
+            and profile.has_non_ascii
+            and source_name in {"Internet Archive", "Free Music Archive"}
+        ):
+            selected = self._ensure_phase_a_translit_reachable(source_name, variants, selected, limit)
+
+        return selected
+
+    def _ensure_phase_a_translit_reachable(
+        self,
+        source_name: str,
+        variants: list[QueryVariant],
+        selected: list[QueryVariant],
+        limit: int,
+    ) -> list[QueryVariant]:
+        by_kind = {variant.kind: variant for variant in variants}
+        translit = by_kind.get("translit_artist_title")
+        if translit is None or any(variant.kind == "translit_artist_title" for variant in selected):
+            return selected
+
+        if source_name == "Internet Archive":
+            preferred_kinds = ["artist_title", "title_quoted", "translit_artist_title"]
+        else:
+            preferred_kinds = ["artist_title", "translit_artist_title", "title_quoted"]
+
+        promoted: list[QueryVariant] = []
+        for kind in preferred_kinds:
+            variant = by_kind.get(kind)
+            if variant is not None and variant not in promoted:
+                promoted.append(variant)
+
+        for variant in selected:
+            if variant not in promoted:
+                promoted.append(variant)
+
+        return promoted[:limit]
 
     def _should_early_exit_phase_a_zero_results(self, source_name: str, zero_result_attempts: int) -> bool:
         cutoff = _PHASE_A_ZERO_RESULT_EXIT.get(source_name)
@@ -627,11 +685,12 @@ class SearchEngine:
             cached = self.query_cache.get(cache_key)
             if cached is None:
                 persisted = self.persistent_cache["queries"].get(cache_key)
-                if isinstance(persisted, list):
+                if isinstance(persisted, list) and persisted:
                     cached = [str(item) for item in persisted]
                     self.query_cache[cache_key] = cached
             if cached is not None:
                 self.run_context.record_cache_hit(source.name, variant.kind)
+                self._song_cache_hits += 1
                 return cached
 
         started = time.time()
@@ -643,7 +702,7 @@ class SearchEngine:
                 self.run_context.mark_source_success(source.name)
             if self.cfg.cache_enabled:
                 self.query_cache[cache_key] = urls
-                if self.cfg.persistent_cache_enabled:
+                if self.cfg.persistent_cache_enabled and urls:
                     self.persistent_cache["queries"][cache_key] = urls
             return urls
         except requests.Timeout:
@@ -687,6 +746,7 @@ class SearchEngine:
                         self.inspect_cache[cache_key] = cached
             if cached is not None:
                 self.run_context.record_cache_hit(source.name, variant.kind)
+                self._song_cache_hits += 1
                 result = SearchResult(**{**cached.__dict__})
                 result.matched_query = variant.query
                 result.matched_query_kind = variant.kind
@@ -744,8 +804,13 @@ class SearchEngine:
             return True
         return False
 
-    def _phase_budget_exceeded(self, song_start: float, phase_budget: float) -> bool:
-        return (time.time() - song_start) > phase_budget
+    def _phase_budget_exceeded(self, phase_start: float, phase_budget: float) -> bool:
+        return (time.time() - phase_start) > phase_budget
+
+    def _finalize_result(self, result: SearchResult) -> SearchResult:
+        result.cache_hits = self._song_cache_hits
+        result.cache_hit = self._song_cache_hits > 0
+        return result
 
     def _good_enough_download(self, result: SearchResult) -> bool:
         threshold = self.cfg.min_downloadable_score
@@ -759,12 +824,8 @@ class SearchEngine:
         source_cfg = self.cfg.source_config_for(result.source)
         if source_cfg and source_cfg.min_page_score is not None:
             threshold = source_cfg.min_page_score
-        # Relax Bandcamp threshold slightly in balanced mode for better recall
         if result.source == "Bandcamp":
-            if self.cfg.maximize_mode:
-                threshold = max(threshold, 0.62)  # Stricter in maximize
-            else:
-                threshold = max(threshold, 0.60)  # Slightly relaxed in balanced
+            threshold = max(threshold, 0.76 if not self.cfg.maximize_mode else 0.78)
         if result.result_tier == ResultTier.TIER_3_WEAK_PAGE:
             threshold = max(threshold, 0.72)
         return result.score >= threshold
@@ -774,8 +835,14 @@ class SearchEngine:
             if (
                 not self.cfg.maximize_mode
                 and result.source == "Bandcamp"
-                and result.score >= 0.70
-                and result.matched_query_kind in {"artist_title", "artist_title_quoted", "title_quoted", "title_only"}
+                and result.score >= 0.76
+                and result.matched_query_kind in {"artist_title", "artist_title_quoted", "title_quoted"}
+            ):
+                return True
+            if (
+                self.cfg.maximize_mode
+                and result.source in _PHASE_B_MAXIMIZE_SOURCES
+                and result.score >= 0.78
             ):
                 return True
             return False
@@ -786,19 +853,12 @@ class SearchEngine:
             return ResultTier.TIER_1_DOWNLOADABLE
         if result.status == SongStatus.PAGE_FOUND:
             if result.source in _PAGE_HEAVY_SOURCES:
-                # Bandcamp: adjust threshold based on mode
-                if self.cfg.maximize_mode:
-                    # More selective in maximize mode
-                    if result.score >= 0.80 and not result.fallback_used:
-                        return ResultTier.TIER_2_STRONG_PAGE
-                else:
-                    # More lenient in balanced mode for better recall
-                    if result.score >= 0.74 and not result.fallback_used:
-                        return ResultTier.TIER_2_STRONG_PAGE
+                if result.score >= (0.80 if self.cfg.maximize_mode else 0.78):
+                    return ResultTier.TIER_2_STRONG_PAGE
                 return ResultTier.TIER_3_WEAK_PAGE
             if result.score >= max(0.60, self.cfg.min_page_score):
                 return ResultTier.TIER_2_STRONG_PAGE
-            if result.score >= self.cfg.min_best_seen_score:
+            if result.score >= max(self.cfg.min_best_seen_score, 0.68):
                 return ResultTier.TIER_3_WEAK_PAGE
         return ResultTier.TIER_4_LOW_CONFIDENCE
 

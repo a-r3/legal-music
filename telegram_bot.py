@@ -5,13 +5,13 @@ Xüsusiyyətlər:
   - URL göndər             → birbaşa yt-dlp ilə yüklə
   - .txt fayl göndər       → toplu yükləmə (hər sətir bir mahnı)
   - /status, /help, /start
+  - Canlı progress mesajları (edit_text ilə yenilənir)
 
 BOT_TOKEN və CHANNEL_ID → .env faylından oxunur
 """
 from __future__ import annotations
 
 import asyncio
-import glob
 import logging
 import os
 import re
@@ -20,6 +20,7 @@ import sys
 import tempfile
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 try:
     from dotenv import load_dotenv
@@ -50,7 +51,7 @@ logger = logging.getLogger("legal-music.bot")
 # ---------------------------------------------------------------------------
 
 try:
-    from telegram import Update
+    from telegram import Message, Update
     from telegram.error import NetworkError, TelegramError
     from telegram.ext import (
         Application,
@@ -101,8 +102,8 @@ if not BOT_TOKEN:
     logger.error("BOT_TOKEN tapılmadı. .env faylını yoxlayın.")
     sys.exit(1)
 
-_URL_RE = re.compile(r"https?://[^\s]+|www\.[^\s]+|youtu\.be/[^\s]+", re.IGNORECASE)
-_SEP_RE = re.compile(r"\s*[/|,–—]\s*|\s+by\s+|\s*:\s*", re.IGNORECASE)
+_URL_RE      = re.compile(r"https?://[^\s]+|www\.[^\s]+|youtu\.be/[^\s]+", re.IGNORECASE)
+_SEP_RE      = re.compile(r"\s*[/|,–—]\s*|\s+by\s+|\s*:\s*", re.IGNORECASE)
 _HAS_DASH_RE = re.compile(r"\s+-\s+")
 
 _cfg: AppConfig | None = None
@@ -158,65 +159,32 @@ def _smart_queries(text: str) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# yt-dlp fallback: search by name and download
+# Progress message helper
 # ---------------------------------------------------------------------------
 
-async def _ytdlp_search_download(query: str, dest_dir: Path) -> Path:
-    """YouTube-da 'query' axtarıb birinci nəticəni MP3 kimi yüklə."""
-    if not shutil.which("yt-dlp"):
-        raise RuntimeError("yt-dlp quraşdırılmayıb")
-
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    output_template = str(dest_dir / "%(title)s.%(ext)s")
-
-    cmd = [
-        "yt-dlp",
-        f"ytsearch1:{query}",
-        "-x", "--audio-format", "mp3",
-        "--audio-quality", "0",
-        "-o", output_template,
-        "--no-warnings", "--quiet",
-        "--no-playlist",
-    ]
-
-    loop = asyncio.get_event_loop()
-    import subprocess
-
-    def _run():
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-        if result.returncode != 0:
-            raise RuntimeError(result.stderr[:300] or "yt-dlp xətası")
-
-    await loop.run_in_executor(None, _run)
-
-    # Ən son MP3 faylı tap
-    mp3_files = sorted(dest_dir.glob("*.mp3"), key=lambda p: p.stat().st_mtime)
-    if not mp3_files:
-        raise RuntimeError("yt-dlp: fayl tapılmadı")
-    return mp3_files[-1]
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def _log_error(ctx: str, exc: Exception) -> None:
-    stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+async def _safe_edit(msg: Optional[Message], text: str) -> None:
+    """Mesajı yenilə; xəta olarsa susqun keç."""
+    if not msg:
+        return
     try:
-        with ERROR_LOG.open("a", encoding="utf-8") as f:
-            f.write(f"[{stamp}] ERROR [{ctx}]: {exc}\n")
+        await msg.edit_text(text)
     except Exception:
         pass
-    logger.error("[%s] %s", ctx, exc)
 
 
-async def _safe_reply(update: Update, text: str) -> None:
+async def _safe_reply(update: Update, text: str) -> Optional[Message]:
+    """Cavab göndər; mesaj obyektini qaytar (sonradan edit üçün)."""
     try:
         if update.message:
-            await update.message.reply_text(text, parse_mode=None)
+            return await update.message.reply_text(text, parse_mode=None)
     except Exception as exc:
         logger.warning("reply göndərilmədi: %s", exc)
+    return None
 
+
+# ---------------------------------------------------------------------------
+# Audio göndər
+# ---------------------------------------------------------------------------
 
 async def _send_audio(
     context: ContextTypes.DEFAULT_TYPE,
@@ -227,7 +195,7 @@ async def _send_audio(
     global _downloads_total
     _downloads_total += 1
 
-    async def _one(chat_id):
+    async def _one(chat_id: str | int) -> None:
         try:
             with file_path.open("rb") as f:
                 await context.bot.send_audio(
@@ -247,54 +215,186 @@ async def _send_audio(
 
 
 # ---------------------------------------------------------------------------
-# Bir mahnını axtar + yüklə  (core logic, hər yerdə istifadə edilir)
+# yt-dlp fallback
+# ---------------------------------------------------------------------------
+
+async def _ytdlp_search_download(query: str, dest_dir: Path) -> Path:
+    """YouTube-da 'query' axtarıb birinci nəticəni MP3 kimi yüklə."""
+    if not shutil.which("yt-dlp"):
+        raise RuntimeError("yt-dlp quraşdırılmayıb")
+
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    output_template = str(dest_dir / "%(title)s.%(ext)s")
+
+    cmd = [
+        "yt-dlp", f"ytsearch1:{query}",
+        "-x", "--audio-format", "mp3",
+        "--audio-quality", "0",
+        "-o", output_template,
+        "--no-warnings", "--quiet",
+        "--no-playlist",
+    ]
+
+    import subprocess
+
+    def _run() -> None:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr[:300] or "yt-dlp xətası")
+
+    await asyncio.get_event_loop().run_in_executor(None, _run)
+
+    mp3_files = sorted(dest_dir.glob("*.mp3"), key=lambda p: p.stat().st_mtime)
+    if not mp3_files:
+        raise RuntimeError("yt-dlp: fayl tapılmadı")
+    return mp3_files[-1]
+
+
+# ---------------------------------------------------------------------------
+# Core: bir mahnını axtar + yüklə
 # ---------------------------------------------------------------------------
 
 async def _search_and_download(
     song: str,
     context: ContextTypes.DEFAULT_TYPE,
     reply_update: Update | None = None,
+    status_msg: Optional[Message] = None,
 ) -> bool:
-    """Mahnını axtar, yüklə, kanala göndər. Uğursa True qaytarır."""
-    queries = _smart_queries(song)
-    cfg     = _get_cfg()
-    result  = None
+    """Mahnını axtar, yüklə, göndər. Uğursa True qaytarır.
+
+    status_msg varsa, hər mərhələdə həmin mesajı edit edir
+    (ayrı mesaj göndərmir).
+    """
+    queries       = _smart_queries(song)
+    cfg           = _get_cfg()
+    result        = None
     matched_query = song
 
-    # 1. Qanuni mənbələr
+    # ── Mərhələ 1: qanuni mənbələr ─────────────────────────────────────────
+    await _safe_edit(status_msg, f"⏳ Qanuni mənbələrdə axtarılır…\n🎵 {song}")
+
     for attempt in queries:
         runner = AsyncSearchRunner(cfg, max_concurrent=1, db_path=DB_PATH)
-        res = await runner.search_one(attempt)
+        res    = await runner.search_one(attempt)
         runner.close()
         if res.status in (SongStatus.DOWNLOADED, SongStatus.PAGE_FOUND):
-            result = res
+            result        = res
             matched_query = attempt
             break
 
-    # 2. Tapıldısa yüklə
+    # ── Mərhələ 2: tapıldısa yüklə ─────────────────────────────────────────
     if result and result.status == SongStatus.DOWNLOADED and result.direct_url:
         try:
+            await _safe_edit(status_msg, f"⬇️ Yüklənir…\n🎵 {matched_query}")
             DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
             saved = await asyncio.get_event_loop().run_in_executor(
-                None, lambda: download_file(result.direct_url, matched_query, DOWNLOADS_DIR)
+                None,
+                lambda: download_file(result.direct_url, matched_query, DOWNLOADS_DIR),
             )
-            caption = f"🎵 {matched_query}\n📂 {result.source}"
-            await _send_audio(context, saved, caption, reply_update)
+            await _safe_edit(status_msg, f"📤 Göndərilir…\n🎵 {matched_query}")
+            await _send_audio(context, saved, f"🎵 {matched_query}\n📂 {result.source}", reply_update)
             return True
         except Exception as exc:
             logger.warning("Qanuni mənbə yükləmə xətası (%s): %s", song, exc)
 
-    # 3. yt-dlp fallback — YouTube-da axtar
-    logger.info("yt-dlp fallback: %r", song)
+    # ── Mərhələ 3: yt-dlp YouTube fallback ────────────────────────────────
+    await _safe_edit(status_msg, f"🔄 YouTube-da axtarılır…\n🎵 {song}")
     try:
         DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
         saved = await _ytdlp_search_download(song, DOWNLOADS_DIR)
-        caption = f"🎵 {song}\n📂 YouTube (yt-dlp)"
-        await _send_audio(context, saved, caption, reply_update)
+        await _safe_edit(status_msg, f"📤 Göndərilir…\n🎵 {song}")
+        await _send_audio(context, saved, f"🎵 {song}\n📂 YouTube (yt-dlp)", reply_update)
         return True
     except Exception as exc:
         logger.warning("yt-dlp axtarış xətası (%s): %s", song, exc)
         return False
+
+
+# ---------------------------------------------------------------------------
+# Batch progress helper
+# ---------------------------------------------------------------------------
+
+class _BatchProgress:
+    """Batch yükləmə üçün canlı progress mesajı idarə edir."""
+
+    _ICON = {"pending": "⬜", "active": "⏳", "ok": "✅", "fail": "❌"}
+    _MAX_VISIBLE = 12   # mesajda göstərilən maksimum sətir sayı
+
+    def __init__(self, songs: list[str], msg: Message) -> None:
+        self.songs    = songs
+        self.total    = len(songs)
+        self.states   = ["pending"] * len(songs)
+        self.msg      = msg
+        self.ok_count = 0
+        self.fail_count = 0
+
+    def set_active(self, i: int) -> None:
+        self.states[i] = "active"
+
+    def set_done(self, i: int, ok: bool) -> None:
+        self.states[i] = "ok" if ok else "fail"
+        if ok:
+            self.ok_count += 1
+        else:
+            self.fail_count += 1
+
+    def _progress_bar(self) -> str:
+        done  = self.ok_count + self.fail_count
+        filled = round(10 * done / self.total) if self.total else 0
+        return "█" * filled + "░" * (10 - filled)
+
+    async def render(self) -> None:
+        done  = self.ok_count + self.fail_count
+        bar   = self._progress_bar()
+        lines = [f"📋 {bar}  {done}/{self.total}  (✅{self.ok_count} ❌{self.fail_count})\n"]
+
+        # Cari aktiv indeksi tap
+        active_i = next(
+            (i for i, s in enumerate(self.states) if s == "active"), done
+        )
+
+        # Görünən pəncərə: aktiv sətrin ətrafı
+        start = max(0, active_i - self._MAX_VISIBLE + 3)
+        end   = min(self.total, start + self._MAX_VISIBLE)
+
+        if start > 0:
+            lines.append(f"  ↑ {start} mahnı")
+
+        for i in range(start, end):
+            icon  = self._ICON[self.states[i]]
+            label = self.songs[i][:45]
+            lines.append(f"{icon} {label}")
+
+        if end < self.total:
+            lines.append(f"  ↓ {self.total - end} mahnı")
+
+        await _safe_edit(self.msg, "\n".join(lines))
+
+    async def finish(self, fail_list: list[str]) -> None:
+        text = (
+            f"📊 Tamamlandı!\n\n"
+            f"✅ Yükləndi: {self.ok_count}/{self.total}\n"
+            f"❌ Tapılmadı: {self.fail_count}/{self.total}"
+        )
+        if fail_list:
+            text += "\n\nTapılmayanlar:\n" + "\n".join(f"• {s}" for s in fail_list[:20])
+            if len(fail_list) > 20:
+                text += f"\n… və {len(fail_list) - 20} daha"
+        await _safe_edit(self.msg, text)
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _log_error(ctx: str, exc: Exception) -> None:
+    stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        with ERROR_LOG.open("a", encoding="utf-8") as f:
+            f.write(f"[{stamp}] ERROR [{ctx}]: {exc}\n")
+    except Exception:
+        pass
+    logger.error("[%s] %s", ctx, exc)
 
 
 # ---------------------------------------------------------------------------
@@ -308,7 +408,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "YouTube/URL göndər → yükləyirəm\n"
         ".txt fayl göndər → toplu yükləmə\n\n"
         "Nümunə: Dua Lipa - Levitating\n\n"
-        "/help /status"
+        "/help  /status"
     )
 
 
@@ -321,7 +421,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "URL yüklə:\n"
         "  https://youtube.com/watch?v=...\n\n"
         "Toplu yükləmə:\n"
-        "  songs.txt faylı göndər (hər sətirdə bir mahnı)\n\n"
+        "  songs.txt göndər — hər sətirdə bir mahnı\n\n"
         "/status — statistika\n"
         "/help   — bu mesaj"
     )
@@ -329,15 +429,15 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
-        stats = _get_db().stats()
-        ytdlp = "✅" if shutil.which("yt-dlp") else "❌"
+        stats  = _get_db().stats()
+        ytdlp  = "✅" if shutil.which("yt-dlp") else "❌"
         sources = ", ".join(_get_cfg().enabled_source_names())
         await _safe_reply(update,
             f"📊 Bot Statusu\n\n"
             f"💾 Keş (sorğu): {stats.get('query_cache_entries', 0)}\n"
             f"💾 Keş (mahnı): {stats.get('song_cache_entries', 0)}\n"
-            f"✅ Yüklənmiş: {_downloads_total}\n"
-            f"🎯 Mənbələr: {sources}\n"
+            f"✅ Bu sessiyada yüklənmiş: {_downloads_total}\n"
+            f"🎯 Aktiv mənbələr: {sources}\n"
             f"🔧 yt-dlp: {ytdlp}"
         )
     except Exception as exc:
@@ -354,13 +454,27 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await handle_url(update, context)
         return
 
-    await _safe_reply(update, f"🔍 Axtarılır: {text}…")
-    found = await _search_and_download(text, context, reply_update=update)
-    if not found:
-        await _safe_reply(update,
+    # Canlı status mesajı göndər, sonra mərhələ-mərhələ edit edirik
+    status_msg = await _safe_reply(update, f"🔍 Axtarılır: {text}…")
+    found = await _search_and_download(
+        text, context,
+        reply_update=update,
+        status_msg=status_msg,
+    )
+
+    if found:
+        # Status mesajını sil — audio artıq göndərilib
+        try:
+            if status_msg:
+                await status_msg.delete()
+        except Exception:
+            pass
+    else:
+        await _safe_edit(
+            status_msg,
             f"❌ Tapılmadı: {text}\n\n"
             f"💡 Format: İfaçı - Mahnı adı\n"
-            f"Nümunə: Dua Lipa - Levitating"
+            f"Nümunə: Dua Lipa - Levitating",
         )
 
 
@@ -368,7 +482,7 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     """URL mesajı → yt-dlp ilə yüklə."""
     if not update.message or not update.message.text:
         return
-    text = update.message.text.strip()
+    text  = update.message.text.strip()
     match = _URL_RE.search(text)
     if not match:
         return
@@ -378,7 +492,7 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await _safe_reply(update, "❌ yt-dlp quraşdırılmayıb: pip install yt-dlp")
         return
 
-    await _safe_reply(update, f"⬇️ URL yüklənir…")
+    status_msg = await _safe_reply(update, "⬇️ URL yüklənir…")
 
     try:
         from legal_music.search.sources.ytdlp_source import download_via_ytdlp
@@ -387,18 +501,24 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     try:
         DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
-        dest = DOWNLOADS_DIR / "url_download"
+        dest  = DOWNLOADS_DIR / "url_download"
         saved = await asyncio.get_event_loop().run_in_executor(
             None, lambda: download_via_ytdlp(url, dest)
         )
+        await _safe_edit(status_msg, "📤 Göndərilir…")
         await _send_audio(context, saved, f"🎵 {url[:80]}", reply_update=update)
+        try:
+            if status_msg:
+                await status_msg.delete()
+        except Exception:
+            pass
     except Exception as exc:
         _log_error(f"handle_url:{url}", exc)
-        await _safe_reply(update, f"❌ URL yüklənmədi: {exc}")
+        await _safe_edit(status_msg, f"❌ URL yüklənmədi: {exc}")
 
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """TXT fayl → toplu yükləmə."""
+    """TXT fayl → toplu yükləmə (canlı progress ilə)."""
     if not update.message or not update.message.document:
         return
 
@@ -407,9 +527,9 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await _safe_reply(update, "⚠️ Yalnız .txt faylı göndərin (hər sətirdə bir mahnı)")
         return
 
-    await _safe_reply(update, "📄 Fayl alındı, mahnılar axtarılır…")
+    status_msg = await _safe_reply(update, "📄 Fayl alındı, oxunur…")
 
-    # Faylı yüklə
+    # ── Faylı yüklə ───────────────────────────────────────────────────────
     try:
         tg_file = await context.bot.get_file(doc.file_id)
         with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as tmp:
@@ -417,53 +537,49 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await tg_file.download_to_drive(tmp_path)
     except Exception as exc:
         _log_error("handle_document:download", exc)
-        await _safe_reply(update, f"❌ Fayl yüklənmədi: {exc}")
+        await _safe_edit(status_msg, f"❌ Fayl yüklənmədi: {exc}")
         return
 
-    # Sətirləri oxu
+    # ── Mahnı adlarını oxu ────────────────────────────────────────────────
     try:
         songs = read_playlist(tmp_path)
         tmp_path.unlink(missing_ok=True)
     except Exception as exc:
         tmp_path.unlink(missing_ok=True)
-        await _safe_reply(update, f"❌ Fayl oxunmadı: {exc}")
+        await _safe_edit(status_msg, f"❌ Fayl oxunmadı: {exc}")
         return
 
     if not songs:
-        await _safe_reply(update, "⚠️ Faylda mahnı tapılmadı.")
+        await _safe_edit(status_msg, "⚠️ Faylda mahnı tapılmadı.")
         return
 
-    await _safe_reply(update, f"🎵 {len(songs)} mahnı tapıldı. Yüklənir…")
+    # ── Batch progress başlat ─────────────────────────────────────────────
+    progress = _BatchProgress(songs, status_msg)  # type: ignore[arg-type]
+    await progress.render()
 
-    ok_count = 0
-    fail_count = 0
     fail_list: list[str] = []
 
-    for i, song in enumerate(songs, 1):
+    for i, song in enumerate(songs):
+        progress.set_active(i)
+        await progress.render()
+
         try:
-            await _safe_reply(update, f"[{i}/{len(songs)}] 🔍 {song}")
-            found = await _search_and_download(song, context, reply_update=None)
-            if found:
-                ok_count += 1
-            else:
-                fail_count += 1
-                fail_list.append(song)
+            found = await _search_and_download(
+                song, context,
+                reply_update=None,   # batch-də ayrı cavab göndərmirik
+                status_msg=None,     # progress mesajını batch özü idarə edir
+            )
         except Exception as exc:
             _log_error(f"batch:{song}", exc)
-            fail_count += 1
-            fail_list.append(song)
+            found = False
 
-    # Yekun hesabat
-    summary = (
-        f"✅ Toplu yükləmə tamamlandı!\n\n"
-        f"✅ Uğurlu: {ok_count}/{len(songs)}\n"
-        f"❌ Tapılmadı: {fail_count}/{len(songs)}"
-    )
-    if fail_list:
-        summary += "\n\nTapılmayanlar:\n" + "\n".join(f"• {s}" for s in fail_list[:20])
-        if len(fail_list) > 20:
-            summary += f"\n… və {len(fail_list) - 20} daha"
-    await _safe_reply(update, summary)
+        progress.set_done(i, found)
+        if not found:
+            fail_list.append(song)
+        await progress.render()
+
+    # ── Yekun ─────────────────────────────────────────────────────────────
+    await progress.finish(fail_list)
 
 
 # ---------------------------------------------------------------------------
@@ -493,10 +609,7 @@ def main() -> None:
     app.add_handler(CommandHandler("help",   cmd_help))
     app.add_handler(CommandHandler("status", cmd_status))
 
-    # Sənəd (txt fayl) → toplu yükləmə
-    app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
-
-    # Mətn → mahnı axtarışı
+    app.add_handler(MessageHandler(filters.Document.ALL,         handle_document))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
     app.add_error_handler(error_handler)

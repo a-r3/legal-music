@@ -144,4 +144,6 @@ echo -e "  ${BOLD}Logları izləmək:${RESET}       tail -f $REPO_DIR/output/bot
 echo ""
 echo -e "${YELLOW}Botu indi başlatmaq istəyirsiniz? [Y/n]${RESET}"
 read -r START_NOW
-[[ "$START_NOW" =~ ^[Nn]$ ]] || music-start
+if [[ ! "$START_NOW" =~ ^[Nn]$ ]]; then
+    /usr/local/bin/music-start
+fi

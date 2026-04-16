@@ -368,7 +368,7 @@ legal-music dry --maximize my_songs.txt
 legal-music batch-dry --maximize ~/playlists/
 
 # Or use the repo wrapper for all playlists under ./playlists
-./run_playlists.sh --maximize
+./scripts/run_playlists.sh --maximize
 ```
 
 ### Tuning for slow conditions
@@ -398,8 +398,8 @@ legal-music batch-dl ~/playlists/
 legal-music batch-dry --fast ~/playlists/
 
 # Repo-local wrapper: process every playlists/*.txt to output/<playlist>/
-./run_playlists.sh
-./run_playlists.sh --download
+./scripts/run_playlists.sh
+./scripts/run_playlists.sh --download
 ```
 
 ---

@@ -30,6 +30,7 @@ songs.txt
 .env
 .env.*
 .claude/
+.codex
 
 # keep example files
 !playlists/example.txt

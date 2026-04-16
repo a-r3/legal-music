@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PLAYLIST_DIR="$ROOT_DIR/playlists"
 OUTPUT_DIR="$ROOT_DIR/output"
 MODE="dry"
@@ -41,7 +41,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         *)
             echo "Unknown argument: $1" >&2
-            echo "Usage: ./run_playlists.sh [--download] [--maximize] [--verbose] [--no-color] [-c CONFIG]" >&2
+            echo "Usage: ./scripts/run_playlists.sh [--download] [--maximize] [--verbose] [--no-color] [-c CONFIG]" >&2
             exit 1
             ;;
     esac
@@ -99,3 +99,4 @@ print(
 PY
     fi
 done
+

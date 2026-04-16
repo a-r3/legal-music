@@ -1,4 +1,0 @@
-chore: initialize legal-music Python package
-feat: add CLI commands for run, stats, doctor, backup-config and reset-config
-chore: add ruff, pytest, makefile and github actions
-docs: add README, changelog, contributing and security policy

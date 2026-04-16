@@ -249,16 +249,21 @@ async def _send_audio(
 # yt-dlp fallback
 # ---------------------------------------------------------------------------
 
-async def _ytdlp_search_download(query: str, dest_dir: Path) -> Path:
-    """YouTube-da 'query' axtarıb birinci nəticəni MP3 kimi yüklə."""
+async def _ytdlp_download(target: str, dest_dir: Path) -> Path:
+    """URL və ya axtarış sorğusu ilə MP3 yüklə.
+
+    target URL-dirsə birbaşa yüklər; deyilsə 'ytsearch1:' ilə axtarır.
+    Fayl adı həmişə YouTube başlığından (%(title)s) götürülür.
+    """
     if not shutil.which("yt-dlp"):
         raise RuntimeError("yt-dlp quraşdırılmayıb")
 
     dest_dir.mkdir(parents=True, exist_ok=True)
     output_template = str(dest_dir / "%(title)s.%(ext)s")
 
+    source = target if target.startswith("http") else f"ytsearch1:{target}"
     cmd = [
-        "yt-dlp", f"ytsearch1:{query}",
+        "yt-dlp", source,
         "-x", "--audio-format", "mp3",
         "--audio-quality", "0",
         "-o", output_template,
@@ -279,6 +284,10 @@ async def _ytdlp_search_download(query: str, dest_dir: Path) -> Path:
     if not mp3_files:
         raise RuntimeError("yt-dlp: fayl tapılmadı")
     return mp3_files[-1]
+
+
+# köhnə adı saxla — geriyə uyğunluq üçün
+_ytdlp_search_download = _ytdlp_download
 
 
 # ---------------------------------------------------------------------------
@@ -531,21 +540,11 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     status_msg = await _safe_reply(update, "⬇️ URL yüklənir…")
 
     try:
-        from legal_music.search.sources.ytdlp_source import download_via_ytdlp
-    except ImportError:
-        from src.legal_music.search.sources.ytdlp_source import download_via_ytdlp  # type: ignore
-
-    try:
         DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
-        # Hər URL üçün unikal qovluq (üst-üstə yazılmasın)
-        ts   = datetime.now().strftime("%Y%m%d_%H%M%S")
-        dest = DOWNLOADS_DIR / f"url_{ts}"
-        saved = await asyncio.get_event_loop().run_in_executor(
-            None, lambda: download_via_ytdlp(url, dest)
-        )
+        # _ytdlp_download URL-i birbaşa yükləyir, fayl adı %(title)s olur
+        saved = await _ytdlp_download(url, DOWNLOADS_DIR)
         await _safe_edit(status_msg, "📤 Göndərilir…")
-        # yt-dlp faylı %(title)s ilə adlandırır — stem-i başlıq kimi istifadə et
-        await _send_audio(context, saved, f"🎵 {saved.stem}\n🔗 {url[:60]}",
+        await _send_audio(context, saved, f"🎵 {saved.stem}",
                           reply_update=update, title=saved.stem[:64])
         try:
             if status_msg:

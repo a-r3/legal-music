@@ -16,6 +16,7 @@ from .reports import (
     HAS_XLSX,
     format_elapsed,
     print_summary,
+    result_to_row,
     save_csv,
     save_duplicates_csv,
     save_errors_log,
@@ -83,15 +84,24 @@ def _run_playlist(
             p.vlog(f"searching: {song}")
         result = engine.search_song(song)
         song_elapsed = time.time() - song_started
-        phase_tag = " [B]" if result.resolved_phase == "phase_b" else ""
+        phase_tag = " phase=B" if result.resolved_phase == "phase_b" else ""
+        cache_tag = f" cache={result.cache_hits}" if result.cache_hits else ""
+        source_tag = result.source or "-"
+        score_tag = f"{result.score:.2f}"
         t = f"{song_elapsed:.1f}s"
 
         if result.status == SongStatus.DOWNLOADED and result.direct_url:
             if dry_run:
                 stats.downloaded += 1
-                p.ok(_format_song_line(idx, total, song, f"✓ {result.source}  score={result.score:.2f}{phase_tag}  {t}"))
+                p.ok(_format_song_line(idx, total, song, f"downloaded [{source_tag}] {score_tag} {t}{phase_tag}{cache_tag}"))
+                if verbose:
+                    p.dim(
+                        f"    phase={result.resolved_phase or '-'} "
+                        f"tier={result.result_tier.value} "
+                        f"query={result.matched_query_kind or '-'} "
+                        f"cache_hits={result.cache_hits}"
+                    )
                 if verbose and result.matched_query:
-                    p.dim(f"    {result.result_tier.value}  query={result.matched_query_kind or 'raw'}")
                     p.dim(f"    {result.direct_url}")
             else:
                 try:
@@ -100,39 +110,49 @@ def _run_playlist(
                     )
                     result.saved_file = str(saved)
                     stats.downloaded += 1
-                    p.ok(_format_song_line(idx, total, song, f"✓ {saved.name}  score={result.score:.2f}{phase_tag}  {t}"))
-                    if verbose and result.matched_query:
-                        p.dim(f"    {result.result_tier.value}  query={result.matched_query_kind or 'raw'}")
+                    p.ok(_format_song_line(idx, total, song, f"downloaded [{source_tag}] {score_tag} {t}{phase_tag}{cache_tag}"))
+                    if verbose:
+                        p.dim(
+                            f"    phase={result.resolved_phase or '-'} "
+                            f"tier={result.result_tier.value} "
+                            f"query={result.matched_query_kind or '-'} "
+                            f"cache_hits={result.cache_hits}"
+                        )
                 except Exception as e:
                     result.status = SongStatus.DOWNLOAD_ERROR
                     result.note = f"Download error: {e}"
                     stats.download_error += 1
                     err_msg = f"[DOWNLOAD ERROR] {song} | {result.direct_url} | {e}"
                     errors.append(err_msg)
-                    p.err(_format_song_line(idx, total, song, f"! download error  {t}"))
+                    p.err(_format_song_line(idx, total, song, f"download_error [{source_tag}] {score_tag} {t}{cache_tag}"))
 
         elif result.status == SongStatus.PAGE_FOUND:
             stats.page_found += 1
             fallback_tag = " [fallback]" if result.fallback_used else ""
-            p.warn(_format_song_line(idx, total, song, f"~ {result.source}  score={result.score:.2f}{phase_tag}{fallback_tag}  {t}"))
-            if verbose and result.matched_query:
-                p.dim(f"    {result.result_tier.value}  query={result.matched_query_kind or 'raw'}")
+            p.warn(_format_song_line(idx, total, song, f"page_found [{source_tag}] {score_tag} {t}{phase_tag}{fallback_tag}{cache_tag}"))
+            if verbose:
+                p.dim(
+                    f"    phase={result.resolved_phase or '-'} "
+                    f"tier={result.result_tier.value} "
+                    f"query={result.matched_query_kind or '-'} "
+                    f"cache_hits={result.cache_hits}"
+                )
             if verbose and result.page_url:
                 p.dim(f"    {result.page_url}")
 
         elif result.status == SongStatus.BLOCKED:
             stats.blocked += 1
-            p.warn(_format_song_line(idx, total, song, f"blocked {result.source}  {t}"))
+            p.warn(_format_song_line(idx, total, song, f"blocked [{source_tag}] {score_tag} {t}{cache_tag}"))
 
         elif result.status == SongStatus.NOT_FOUND:
             stats.not_found += 1
-            best_tag = f"  best={result.best_seen_score:.2f}@{result.best_seen_source}" if result.best_seen_score else ""
-            p.dim(_format_song_line(idx, total, song, f"- not found{best_tag}  {t}"))
+            note_tag = f" best={result.best_seen_score:.2f}@{result.best_seen_source}" if result.best_seen_score else ""
+            p.dim(_format_song_line(idx, total, song, f"not_found [-] {score_tag} {t}{note_tag}{cache_tag}"))
 
         elif result.status in (SongStatus.ERROR, SongStatus.DOWNLOAD_ERROR):
             stats.errors += 1
             errors.append(f"[ERROR] {song} | {result.note}")
-            p.err(_format_song_line(idx, total, song, f"! error  {t}"))
+            p.err(_format_song_line(idx, total, song, f"error [{source_tag}] {score_tag} {t}{cache_tag}"))
 
         if result.status in {SongStatus.DOWNLOADED, SongStatus.PAGE_FOUND}:
             if result.resolved_phase == "phase_a":
@@ -286,6 +306,7 @@ def _run_playlist(
         }
         for src, metric in engine.run_context.sources.items()
     }
+    result_rows = [result_to_row(result) for result in results]
     summary = {
         "playlist": playlist_name,
         "mode": "dry-run" if dry_run else "download",
@@ -295,6 +316,7 @@ def _run_playlist(
         "elapsed_human": format_elapsed(stats.elapsed_seconds),
         "avg_seconds_per_song": round(stats.avg_seconds_per_song, 3),
         "avg_seconds_per_success": round(stats.avg_seconds_per_success, 3),
+        "avg_seconds_per_useful_result": round(stats.avg_seconds_per_success, 3),
         "phase_a_wins": stats.phase_a_wins,
         "phase_b_wins": stats.phase_b_wins,
         "rescued_by_fallback": rescued_by_fallback,
@@ -304,6 +326,7 @@ def _run_playlist(
         "tier_counts": tier_counts,
         "source_runtime": source_summary,
         "phase_runtime": engine.phase_metrics,
+        "results": result_rows,
     }
     save_summary_json(summary, output_dir / "summary.json")
 
@@ -403,6 +426,17 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         p.ok("  ok  Internet Archive API")
     except Exception as e:
         p.err(f"  Internet Archive API unreachable: {e}")
+        all_ok = False
+
+    # Free Music Archive check (critical)
+    try:
+        import requests as req
+
+        r = req.get("https://freemusicarchive.org/search?quicksearch=test", timeout=5)
+        r.raise_for_status()
+        p.ok("  ok  Free Music Archive")
+    except Exception as e:
+        p.err(f"  Free Music Archive unreachable: {e}")
         all_ok = False
 
     p.separator()
@@ -598,6 +632,7 @@ def _batch_run(args: argparse.Namespace, dry_run: bool) -> int:
     for name, songs in playlists.items():
         p.cyan(f"\n=== Playlist: {name} ===")
         output_dir = base_output / name
+        playlist_started = time.time()
         stats = _run_playlist(
             songs,
             name,
@@ -607,6 +642,7 @@ def _batch_run(args: argparse.Namespace, dry_run: bool) -> int:
             verbose=getattr(args, "verbose", False),
             no_color=getattr(args, "no_color", False),
         )
+        playlist_elapsed = time.time() - playlist_started
         total_stats.downloaded += stats.downloaded
         total_stats.page_found += stats.page_found
         total_stats.not_found += stats.not_found
@@ -615,6 +651,13 @@ def _batch_run(args: argparse.Namespace, dry_run: bool) -> int:
         total_stats.errors += stats.errors
         total_stats.duplicates += stats.duplicates
         total_stats.total += stats.total
+        p.info(
+            f"{name} - processed={stats.total} "
+            f"downloaded={stats.downloaded} "
+            f"page_found={stats.page_found} "
+            f"not_found={stats.not_found} "
+            f"elapsed={playlist_elapsed:.1f}s"
+        )
 
     p.separator()
     p.bold("BATCH COMPLETE")
@@ -719,7 +762,7 @@ def _compact_song(song: str, width: int = 46) -> str:
 
 
 def _format_song_line(index: int, total: int, song: str, outcome: str) -> str:
-    return f"[{index}/{total}] {_compact_song(song)} | {outcome}"
+    return f"[{index}/{total}] {_compact_song(song)} - {outcome}"
 
 
 def _apply_cfg_overrides(cfg: AppConfig, args: argparse.Namespace) -> None:

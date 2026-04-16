@@ -6,6 +6,8 @@
 set -e
 
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
+NONINTERACTIVE="${INSTALL_NONINTERACTIVE:-0}"
+SKIP_BOT_SETUP="${SKIP_BOT_SETUP:-0}"
 GREEN="\e[32m"; YELLOW="\e[33m"; RED="\e[31m"; BOLD="\e[1m"; RESET="\e[0m"
 
 ok()   { echo -e "${GREEN}✅ $*${RESET}"; }
@@ -71,28 +73,47 @@ ok "output/ və downloads/ hazırdır"
 step "Bot konfiqurasiyası…"
 ENV_FILE="$REPO_DIR/.env"
 
-if [ -f "$ENV_FILE" ]; then
+if [[ "$SKIP_BOT_SETUP" =~ ^(1|true|TRUE|yes|YES)$ ]]; then
+    warn "SKIP_BOT_SETUP aktivdir, .env konfiqurasiyası ötürülür"
+elif [ -f "$ENV_FILE" ]; then
     warn ".env artıq mövcuddur. Yenidən konfiqurasiya etmək istəyirsiniz? [y/N]"
-    read -r OVERWRITE
+    if [[ "$NONINTERACTIVE" =~ ^(1|true|TRUE|yes|YES)$ ]]; then
+        OVERWRITE="n"
+    else
+        read -r OVERWRITE
+    fi
     [[ "$OVERWRITE" =~ ^[Yy]$ ]] || { ok ".env saxlanıldı"; }
 fi
 
-if [[ "$OVERWRITE" =~ ^[Yy]$ ]] || [ ! -f "$ENV_FILE" ]; then
-    echo ""
-    echo -e "${BOLD}Telegram Bot Token (BotFather-dən alın):${RESET}"
-    read -r BOT_TOKEN
-    [ -z "$BOT_TOKEN" ] && err "Bot token boş ola bilməz"
+if [[ ! "$SKIP_BOT_SETUP" =~ ^(1|true|TRUE|yes|YES)$ ]] && { [[ "$OVERWRITE" =~ ^[Yy]$ ]] || [ ! -f "$ENV_FILE" ]; }; then
+    BOT_TOKEN_VALUE="${BOT_TOKEN:-}"
+    CHANNEL_ID_VALUE="${CHANNEL_ID:-}"
 
     echo ""
-    echo -e "${BOLD}Telegram Channel ID (məs: -1001234567890):${RESET}"
-    echo -e "${YELLOW}  Channel ID-ni bilmirsinizsə: bota /start yazın, sonra aşağıdakı linki açın:"
-    echo -e "  https://api.telegram.org/bot${BOT_TOKEN}/getUpdates${RESET}"
-    read -r CHANNEL_ID
-    [ -z "$CHANNEL_ID" ] && err "Channel ID boş ola bilməz"
+    if [ -z "$BOT_TOKEN_VALUE" ]; then
+        echo -e "${BOLD}Telegram Bot Token (BotFather-dən alın):${RESET}"
+        if [[ "$NONINTERACTIVE" =~ ^(1|true|TRUE|yes|YES)$ ]]; then
+            err "INSTALL_NONINTERACTIVE aktivdir, amma BOT_TOKEN verilməyib"
+        fi
+        read -r BOT_TOKEN_VALUE
+    fi
+    [ -z "$BOT_TOKEN_VALUE" ] && err "Bot token boş ola bilməz"
+
+    echo ""
+    if [ -z "$CHANNEL_ID_VALUE" ]; then
+        echo -e "${BOLD}Telegram Channel ID (məs: -1001234567890):${RESET}"
+        echo -e "${YELLOW}  Channel ID-ni bilmirsinizsə: bota /start yazın, sonra aşağıdakı linki açın:"
+        echo -e "  https://api.telegram.org/bot${BOT_TOKEN_VALUE}/getUpdates${RESET}"
+        if [[ "$NONINTERACTIVE" =~ ^(1|true|TRUE|yes|YES)$ ]]; then
+            err "INSTALL_NONINTERACTIVE aktivdir, amma CHANNEL_ID verilməyib"
+        fi
+        read -r CHANNEL_ID_VALUE
+    fi
+    [ -z "$CHANNEL_ID_VALUE" ] && err "Channel ID boş ola bilməz"
 
     cat > "$ENV_FILE" <<EOF
-BOT_TOKEN=${BOT_TOKEN}
-CHANNEL_ID=${CHANNEL_ID}
+BOT_TOKEN=${BOT_TOKEN_VALUE}
+CHANNEL_ID=${CHANNEL_ID_VALUE}
 EOF
     ok ".env yaradıldı"
 fi

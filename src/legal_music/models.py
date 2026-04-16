@@ -38,6 +38,8 @@ class SearchResult:
     saved_file: str = ""
     fallback_used: bool = False
     resolved_phase: str = ""
+    cache_hit: bool = False
+    cache_hits: int = 0
     result_tier: ResultTier = ResultTier.TIER_4_LOW_CONFIDENCE
     best_seen_source: str = ""
     best_seen_score: float = 0.0

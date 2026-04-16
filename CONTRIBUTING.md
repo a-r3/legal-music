@@ -6,8 +6,8 @@ Thank you for your interest in contributing to **legal-music**!
 
 If you find a bug or have a feature request:
 
-1. Check [existing issues](https://github.com/your-org/legal-music/issues) first
-2. If not reported, [open a new issue](https://github.com/your-org/legal-music/issues/new) with:
+1. Check [existing issues](https://github.com/a-r3/legal-music/issues) first
+2. If not reported, [open a new issue](https://github.com/a-r3/legal-music/issues/new) with:
    - Clear description of the problem
    - Steps to reproduce (for bugs)
    - Expected vs. actual behavior
@@ -19,7 +19,7 @@ If you find a bug or have a feature request:
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-org/legal-music.git
+git clone https://github.com/a-r3/legal-music.git
 cd legal-music
 
 # Install in editable mode with dev dependencies

@@ -27,6 +27,9 @@ report.xlsx
 # private local config
 config.json
 songs.txt
+.env
+.env.*
+.claude/
 
 # keep example files
 !playlists/example.txt

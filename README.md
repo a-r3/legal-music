@@ -467,7 +467,7 @@ CSV reports will still be generated.
 
 ```bash
 # Clone and enter the repository
-git clone https://github.com/your-org/legal-music.git
+git clone https://github.com/a-r3/legal-music.git
 cd legal-music
 
 # Install in editable mode with dev tools

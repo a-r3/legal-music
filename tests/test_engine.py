@@ -2,6 +2,7 @@
 
 import time
 from collections import defaultdict
+from types import MethodType
 
 from legal_music.config import AppConfig
 from legal_music.models import ResultTier, SearchResult, SongStatus
@@ -58,7 +59,11 @@ def test_balanced_internet_archive_phase_a_reaches_title_quoted():
         "phase_a",
     )
 
-    assert [variant.kind for variant in selected] == ["artist_title", "title_quoted", "artist_title_quoted"]
+    assert [variant.kind for variant in selected] == [
+        "artist_title",
+        "title_quoted",
+        "artist_title_quoted",
+    ]
 
 
 def test_balanced_internet_archive_phase_b_uses_broader_recovery_variants():
@@ -74,12 +79,7 @@ def test_balanced_internet_archive_phase_b_uses_broader_recovery_variants():
         "phase_b",
     )
 
-    assert [variant.kind for variant in selected] == [
-        "artist_title",
-        "title_quoted",
-        "artist_title_quoted",
-        "raw_quoted",
-    ]
+    assert [variant.kind for variant in selected] == ["artist_title", "title_quoted", "artist_title_quoted"]
 
 
 def test_balanced_can_rescue_strong_bandcamp_best_seen():
@@ -89,7 +89,7 @@ def test_balanced_can_rescue_strong_bandcamp_best_seen():
         song="Artist - Song",
         source="Bandcamp",
         status=SongStatus.PAGE_FOUND,
-        score=0.71,
+        score=0.76,
         matched_query_kind="artist_title",
         result_tier=ResultTier.TIER_3_WEAK_PAGE,
     )
@@ -112,8 +112,8 @@ def test_phase_a_internet_archive_prioritizes_translit_for_non_ascii_song():
 
     assert [variant.kind for variant in selected] == [
         "artist_title",
-        "translit_artist_title",
         "title_quoted",
+        "translit_artist_title",
     ]
 
 
@@ -157,6 +157,7 @@ def test_phase_a_exits_after_two_leading_zero_result_attempts_on_ia(monkeypatch)
         variants=variants,
         variant_limit=cfg.balanced_query_variants,
         song_start=time.time(),
+        phase_start=time.time(),
         phase_budget=9999.0,
         seen_urls=set(),
         seen_queries_by_source=defaultdict(set),
@@ -169,3 +170,125 @@ def test_phase_a_exits_after_two_leading_zero_result_attempts_on_ia(monkeypatch)
     assert result["best_page"] is None
     assert result["best_seen"] is None
     assert search_calls == ["artist_title", "title_quoted"]
+
+
+def test_balanced_phase_b_only_tries_bandcamp():
+    cfg = AppConfig()
+    engine = SearchEngine(cfg)
+
+    assert engine._should_try_source(
+        "Bandcamp",
+        phase_name="phase_b",
+        profile=classify_song("Artist - Song"),
+        song_start=time.time(),
+        best_downloadable=None,
+        best_page=None,
+        best_seen=None,
+    ) is False
+    assert engine._should_try_source(
+        "Jamendo",
+        phase_name="phase_b",
+        profile=classify_song("Artist - Song"),
+        song_start=time.time(),
+        best_downloadable=None,
+        best_page=None,
+        best_seen=None,
+    ) is False
+    assert engine._should_try_source(
+        "Internet Archive",
+        phase_name="phase_b",
+        profile=classify_song("Artist - Song"),
+        song_start=time.time(),
+        best_downloadable=None,
+        best_page=None,
+        best_seen=None,
+    ) is False
+
+
+def test_maximize_phase_b_only_tries_fallback_sources():
+    cfg = AppConfig()
+    cfg.apply_maximize_mode()
+    engine = SearchEngine(cfg)
+
+    assert engine._should_try_source(
+        "Bandcamp",
+        phase_name="phase_b",
+        profile=classify_song("Artist - Song"),
+        song_start=time.time(),
+        best_downloadable=None,
+        best_page=None,
+        best_seen=None,
+    ) is True
+    assert engine._should_try_source(
+        "Jamendo",
+        phase_name="phase_b",
+        profile=classify_song("Artist - Song"),
+        song_start=time.time(),
+        best_downloadable=None,
+        best_page=None,
+        best_seen=None,
+    ) is True
+    assert engine._should_try_source(
+        "Pixabay Music",
+        phase_name="phase_b",
+        profile=classify_song("Artist - Song"),
+        song_start=time.time(),
+        best_downloadable=None,
+        best_page=None,
+        best_seen=None,
+    ) is True
+    assert engine._should_try_source(
+        "Internet Archive",
+        phase_name="phase_b",
+        profile=classify_song("Artist - Song"),
+        song_start=time.time(),
+        best_downloadable=None,
+        best_page=None,
+        best_seen=None,
+    ) is False
+
+
+def test_phase_b_is_skipped_when_phase_a_finds_downloadable(monkeypatch):
+    cfg = AppConfig()
+    engine = SearchEngine(cfg)
+    phase_calls: list[str] = []
+
+    def fake_run_phase(self, **kwargs):
+        phase_calls.append(kwargs["phase_name"])
+        if kwargs["phase_name"] == "phase_a":
+            return {
+                "best_downloadable": SearchResult(
+                    song=kwargs["song"],
+                    source="Internet Archive",
+                    status=SongStatus.DOWNLOADED,
+                    score=0.8,
+                    resolved_phase="phase_a",
+                    result_tier=ResultTier.TIER_1_DOWNLOADABLE,
+                ),
+                "best_page": None,
+                "best_seen": None,
+            }
+        raise AssertionError("phase_b should not run after a Phase A hit")
+
+    monkeypatch.setattr(engine, "_run_phase", MethodType(fake_run_phase, engine))
+
+    result = engine.search_song("Artist - Song")
+
+    assert result.status == SongStatus.DOWNLOADED
+    assert result.resolved_phase == "phase_a"
+    assert phase_calls == ["phase_a"]
+
+
+def test_weak_phase_b_pages_require_stronger_scores_in_maximize():
+    cfg = AppConfig()
+    cfg.apply_maximize_mode()
+    engine = SearchEngine(cfg)
+    weak_page = SearchResult(
+        song="Artist - Song",
+        source="Jamendo",
+        status=SongStatus.PAGE_FOUND,
+        score=0.77,
+        result_tier=ResultTier.TIER_3_WEAK_PAGE,
+    )
+
+    assert engine._good_enough_best_seen(weak_page) is False

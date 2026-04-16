@@ -1,4 +1,6 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -euo pipefail
+
 if pgrep -f telegram_bot.py > /dev/null; then
     pkill -f telegram_bot.py
     echo "🛑 Bot dayandırıldı"

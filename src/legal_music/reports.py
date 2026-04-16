@@ -19,8 +19,11 @@ except Exception:
 REPORT_FIELDS = [
     "song",
     "source",
+    "source_used",
     "status",
     "score",
+    "cache_hit",
+    "cache_hits",
     "matched_query",
     "matched_query_kind",
     "fallback_used",
@@ -42,8 +45,11 @@ def _result_to_row(r: SearchResult) -> dict[str, str]:
     return {
         "song": r.song,
         "source": r.source,
+        "source_used": r.source,
         "status": r.status.value if hasattr(r.status, "value") else str(r.status),
         "score": f"{r.score:.3f}",
+        "cache_hit": "yes" if r.cache_hit else "no",
+        "cache_hits": str(r.cache_hits),
         "matched_query": r.matched_query,
         "matched_query_kind": r.matched_query_kind,
         "fallback_used": "yes" if r.fallback_used else "no",
@@ -59,6 +65,10 @@ def _result_to_row(r: SearchResult) -> dict[str, str]:
         "saved_file": r.saved_file,
         "note": r.note,
     }
+
+
+def result_to_row(result: SearchResult) -> dict[str, str]:
+    return _result_to_row(result)
 
 
 def save_csv(results: list[SearchResult], path: Path) -> None:
@@ -153,20 +163,16 @@ def print_summary(stats: RunStats, paths: dict[str, Path | None], use_color: boo
     p.separator()
     p.bold("SUMMARY")
 
-    found = stats.downloaded + stats.page_found
-    found_pct = f"  ({found * 100 // max(stats.total, 1)}%)" if stats.total else ""
+    useful = stats.downloaded + stats.page_found
+    useful_pct = f"  ({useful * 100 // max(stats.total, 1)}%)" if stats.total else ""
 
-    p.info(f"processed              : {stats.total}")
+    p.info(f"total processed        : {stats.total}")
     if stats.duplicates:
         p.info(f"duplicates skipped     : {stats.duplicates}")
-    if stats.downloaded:
-        p.ok(  f"downloaded             : {stats.downloaded}")
-    if stats.page_found:
-        p.warn(f"page found             : {stats.page_found}")
-    if found:
-        p.info(f"found (total)          : {found}{found_pct}")
-    if stats.not_found:
-        p.info(f"not found              : {stats.not_found}")
+    p.ok(  f"downloaded             : {stats.downloaded}")
+    p.warn(f"page_found             : {stats.page_found}")
+    p.info(f"useful results         : {useful}{useful_pct}")
+    p.info(f"not_found              : {stats.not_found}")
     if stats.blocked:
         p.warn(f"blocked (403/429)      : {stats.blocked}")
     if stats.download_error:
@@ -177,17 +183,11 @@ def print_summary(stats: RunStats, paths: dict[str, Path | None], use_color: boo
     if stats.elapsed_seconds:
         p.info(f"elapsed                : {format_elapsed(stats.elapsed_seconds)}")
     if stats.avg_seconds_per_song:
-        p.info(f"avg / song             : {stats.avg_seconds_per_song:.1f}s")
-    if stats.avg_seconds_per_success and found:
-        p.info(f"avg / result           : {stats.avg_seconds_per_success:.1f}s")
+        p.info(f"avg per song           : {stats.avg_seconds_per_song:.1f}s")
+    if stats.avg_seconds_per_success and useful:
+        p.info(f"avg per useful result  : {stats.avg_seconds_per_success:.1f}s")
 
-    phase_parts = []
-    if stats.phase_a_wins:
-        phase_parts.append(f"A={stats.phase_a_wins}")
-    if stats.phase_b_wins:
-        phase_parts.append(f"B={stats.phase_b_wins}")
-    if phase_parts:
-        p.info(f"phase wins             : {', '.join(phase_parts)}")
+    p.info(f"phase wins             : A={stats.phase_a_wins}, B={stats.phase_b_wins}")
 
     p.separator()
     for label, path in paths.items():

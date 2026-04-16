@@ -6,29 +6,44 @@
 
 ## Quraşdırma
 
-### Tələblər
-
-- Python 3.10+
-- ffmpeg (yt-dlp üçün)
-- pip
-
-### Addımlar
+### Tövsiyə olunan tam quraşdırma (CLI + Telegram bot)
 
 ```bash
-# 1. Repositoriyanı klonlayın
-git clone https://github.com/your-org/legal-music.git
+git clone https://github.com/a-r3/legal-music.git
 cd legal-music
+bash install.sh
+```
 
-# 2. Virtual mühit yaradın (tövsiyə edilir)
+Bu skript avtomatik olaraq:
+- Python 3.10+, `yt-dlp` və `ffmpeg` yoxlayır
+- Python asılılıqlarını qurur
+- `.env` faylını Bot Token və Channel ID ilə yaradır
+- `music-start` və `music-stop` qlobal əmrlərini qeyd edir
+- İstəsəniz botu dərhal başladır
+
+Quraşdırmadan sonra:
+
+```bash
+music-start
+music-stop
+```
+
+### CLI-only quraşdırma
+
+```bash
+git clone https://github.com/a-r3/legal-music.git
+cd legal-music
+pip install --break-system-packages -e .
+```
+
+### Development quraşdırması
+
+```bash
+git clone https://github.com/a-r3/legal-music.git
+cd legal-music
 python3 -m venv .venv
 source .venv/bin/activate
-
-# 3. Asılılıqları quraşdırın
-pip install -r requirements.txt
-pip install -e .
-
-# 4. İlkin konfiqurasiyanı yaradın
-legal-music init
+pip install -e ".[dev]"
 ```
 
 ---
@@ -90,27 +105,33 @@ output/my_songs/
 - Public kanal: `@mykanaladi` (məs. `@musiqikanal`)
 - Private kanal/qrup: bota qoşulun, sonra `https://api.telegram.org/bot<TOKEN>/getUpdates` ilə ID alın
 
-### 3. .env faylı yaradın
+### 3. `.env` faylı
+
+`bash install.sh` bunu sizin üçün avtomatik yaradır. Əl ilə yaratmaq istəyirsinizsə:
 
 ```bash
 cp .env.example .env
 ```
 
-`.env` faylını redaktə edin:
+Sonra aşağıdakı dəyərləri doldurun:
 
-```
+```dotenv
 BOT_TOKEN=123456:ABC-DEF1234...
 CHANNEL_ID=@mykanaladi
+SAVE_LOCAL=true
 ```
 
 ### 4. Botu işə salın
 
 ```bash
-# Birbaşa işə sal
-python telegram_bot.py
+music-start
+tail -f output/bot.log
+```
 
-# Arxa planda işə sal
-nohup python telegram_bot.py > bot.log 2>&1 &
+Alternativ olaraq repo daxilindən:
+
+```bash
+python3 telegram_bot.py
 ```
 
 ### Bot əmrləri
@@ -174,9 +195,8 @@ Konfiqurasiya faylı: `~/.config/legal-music/config.json`
 
 | Preset | Mənbələr |
 |--------|----------|
-| `fast` | Yalnız Internet Archive |
-| `balanced` | IA + Free Music Archive + Bandcamp |
-| `maximize` | Hamısı (CCMixter, Incompetech, YouTube daxil) |
+| `balanced` | Internet Archive + Free Music Archive + Bandcamp |
+| `maximize` | Bandcamp + Jamendo + Pixabay Music daxil olmaqla daha geniş fallback |
 
 ```bash
 # Maksimum axtarış
@@ -195,9 +215,6 @@ legal-music dry --fast my_songs.txt
 | Internet Archive | Public Domain + CC | Ən etibarlı |
 | Free Music Archive | CC lisenziyalı | İfaçı icazəsi var |
 | Bandcamp | Pulsuz yükləmə | Bəzi ifaçılar pulsuz verir |
-| CCMixter | Creative Commons | Remiks cəmiyyəti |
-| Incompetech | Royalty-free | Kevin MacLeod musiqisi |
-| YouTube Audio Library | CC | yt-dlp vasitəsilə |
 | Jamendo | CC lisenziyalı | Əlavə seçim |
 | Pixabay Music | Royalty-free | Əlavə seçim |
 
@@ -212,11 +229,6 @@ legal-music dry --fast my_songs.txt
 pip install yt-dlp
 # və ya
 sudo apt install yt-dlp
-```
-
-### "mutagen tapılmadı"
-```bash
-pip install mutagen fuzzywuzzy python-Levenshtein
 ```
 
 ### Bot işə düşmür

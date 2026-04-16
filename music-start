@@ -1,5 +1,7 @@
-#!/bin/bash
-BOT_DIR="/home/oem/Documents/01_Projects/legal-music"
+#!/usr/bin/env bash
+set -euo pipefail
+
+BOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG="$BOT_DIR/output/bot.log"
 
 if pgrep -f telegram_bot.py > /dev/null; then

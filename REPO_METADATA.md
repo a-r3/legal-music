@@ -35,7 +35,9 @@ v1.2.0 — Initial public package release
 
 ### Install
 ```bash
-pip install .
+git clone https://github.com/a-r3/legal-music.git
+cd legal-music
+bash install.sh
 ```
 
 ### Quick start

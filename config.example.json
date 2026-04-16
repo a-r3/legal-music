@@ -5,22 +5,25 @@
   "delay": 0.25,
   "max_results": 5,
   "timeout": 10,
-  "per_song_timeout": 16,
-  "phase_a_budget_ratio": 0.70,
+  "retry_count": 1,
+  "per_song_timeout": 18,
+  "phase_a_budget_ratio": 0.76,
+  "balanced_query_variants": 5,
+  "maximize_query_variants": 6,
 
   "min_downloadable_score": 0.46,
   "min_page_score": 0.50,
   "min_best_seen_score": 0.50,
 
   "cache_enabled": true,
-  "persistent_cache_enabled": false,
+  "persistent_cache_enabled": true,
 
   "sources": [
-    {"name": "Internet Archive",   "enabled": true},
-    {"name": "Free Music Archive", "enabled": true},
-    {"name": "Bandcamp",           "enabled": true},
-    {"name": "Jamendo",            "enabled": false},
-    {"name": "Pixabay Music",      "enabled": false}
+    {"name": "Internet Archive",   "enabled": true,  "max_variants": 5},
+    {"name": "Free Music Archive", "enabled": true,  "max_variants": 4},
+    {"name": "Bandcamp",           "enabled": true,  "max_variants": 1, "min_page_score": 0.76},
+    {"name": "Jamendo",            "enabled": false, "max_variants": 2},
+    {"name": "Pixabay Music",      "enabled": false, "max_variants": 2}
   ],
 
   "csv_report": true,

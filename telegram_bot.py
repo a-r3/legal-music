@@ -193,14 +193,28 @@ async def _safe_reply(update: Update, text: str) -> Optional[Message]:
 # Audio göndər
 # ---------------------------------------------------------------------------
 
+def _parse_title_performer(song: str) -> tuple[str, str | None]:
+    """'Dua Lipa - Levitating' → ('Levitating', 'Dua Lipa')"""
+    parts = song.split(" - ", 1)
+    if len(parts) == 2:
+        return parts[1].strip(), parts[0].strip()
+    return song.strip(), None
+
+
 async def _send_audio(
     context: ContextTypes.DEFAULT_TYPE,
     file_path: Path,
     caption: str,
     reply_update: Update | None = None,
+    title: str | None = None,
+    performer: str | None = None,
 ) -> None:
     global _downloads_total
     _downloads_total += 1
+
+    # title verilməyibsə faylın adından çıxar (yt-dlp %(title)s formatı)
+    display_title     = title     or file_path.stem
+    display_performer = performer or None
 
     async def _one(chat_id: str | int) -> None:
         try:
@@ -208,6 +222,8 @@ async def _send_audio(
                 await context.bot.send_audio(
                     chat_id=chat_id, audio=f,
                     caption=caption[:1024],
+                    title=display_title[:64],
+                    performer=display_performer,
                     read_timeout=60, write_timeout=60,
                 )
         except TelegramError as e:
@@ -307,7 +323,9 @@ async def _search_and_download(
                 lambda: download_file(result.direct_url, matched_query, DOWNLOADS_DIR),
             )
             await _safe_edit(status_msg, f"📤 Göndərilir…\n🎵 {matched_query}")
-            await _send_audio(context, saved, f"🎵 {matched_query}\n📂 {result.source}", reply_update)
+            t, p = _parse_title_performer(matched_query)
+            await _send_audio(context, saved, f"🎵 {matched_query}\n📂 {result.source}",
+                               reply_update, title=t, performer=p)
             return True
         except Exception as exc:
             logger.warning("Qanuni mənbə yükləmə xətası (%s): %s", song, exc)
@@ -318,7 +336,10 @@ async def _search_and_download(
         DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
         saved = await _ytdlp_search_download(song, DOWNLOADS_DIR)
         await _safe_edit(status_msg, f"📤 Göndərilir…\n🎵 {song}")
-        await _send_audio(context, saved, f"🎵 {song}\n📂 YouTube (yt-dlp)", reply_update)
+        t, p = _parse_title_performer(song)
+        # yt-dlp faylı %(title)s ilə adlandırır — həm stem-i, həm song-u göstər
+        await _send_audio(context, saved, f"🎵 {song}\n📂 YouTube (yt-dlp)",
+                          reply_update, title=saved.stem[:64], performer=p)
         return True
     except Exception as exc:
         logger.warning("yt-dlp axtarış xətası (%s): %s", song, exc)
@@ -523,7 +544,9 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             None, lambda: download_via_ytdlp(url, dest)
         )
         await _safe_edit(status_msg, "📤 Göndərilir…")
-        await _send_audio(context, saved, f"🎵 {url[:80]}", reply_update=update)
+        # yt-dlp faylı %(title)s ilə adlandırır — stem-i başlıq kimi istifadə et
+        await _send_audio(context, saved, f"🎵 {saved.stem}\n🔗 {url[:60]}",
+                          reply_update=update, title=saved.stem[:64])
         try:
             if status_msg:
                 await status_msg.delete()

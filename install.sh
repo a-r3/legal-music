@@ -8,6 +8,7 @@ set -e
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
 NONINTERACTIVE="${INSTALL_NONINTERACTIVE:-0}"
 SKIP_BOT_SETUP="${SKIP_BOT_SETUP:-0}"
+START_NOW_DEFAULT="${START_NOW:-}"
 GREEN="\e[32m"; YELLOW="\e[33m"; RED="\e[31m"; BOLD="\e[1m"; RESET="\e[0m"
 
 ok()   { echo -e "${GREEN}✅ $*${RESET}"; }
@@ -88,6 +89,8 @@ fi
 if [[ ! "$SKIP_BOT_SETUP" =~ ^(1|true|TRUE|yes|YES)$ ]] && { [[ "$OVERWRITE" =~ ^[Yy]$ ]] || [ ! -f "$ENV_FILE" ]; }; then
     BOT_TOKEN_VALUE="${BOT_TOKEN:-}"
     CHANNEL_ID_VALUE="${CHANNEL_ID:-}"
+    SAVE_LOCAL_VALUE="${SAVE_LOCAL:-true}"
+    DOWNLOADS_DIR_VALUE="${DOWNLOADS_DIR:-}"
 
     echo ""
     if [ -z "$BOT_TOKEN_VALUE" ]; then
@@ -114,7 +117,11 @@ if [[ ! "$SKIP_BOT_SETUP" =~ ^(1|true|TRUE|yes|YES)$ ]] && { [[ "$OVERWRITE" =~ 
     cat > "$ENV_FILE" <<EOF
 BOT_TOKEN=${BOT_TOKEN_VALUE}
 CHANNEL_ID=${CHANNEL_ID_VALUE}
+SAVE_LOCAL=${SAVE_LOCAL_VALUE}
 EOF
+    if [ -n "$DOWNLOADS_DIR_VALUE" ]; then
+        printf 'DOWNLOADS_DIR=%s\n' "$DOWNLOADS_DIR_VALUE" >> "$ENV_FILE"
+    fi
     ok ".env yaradıldı"
 fi
 
@@ -163,8 +170,12 @@ echo -e "  ${BOLD}Botu başlatmaq üçün:${RESET}   music-start"
 echo -e "  ${BOLD}Botu dayandırmaq:${RESET}      music-stop"
 echo -e "  ${BOLD}Logları izləmək:${RESET}       tail -f $REPO_DIR/output/bot.log"
 echo ""
-echo -e "${YELLOW}Botu indi başlatmaq istəyirsiniz? [Y/n]${RESET}"
-read -r START_NOW
-if [[ ! "$START_NOW" =~ ^[Nn]$ ]]; then
+if [[ "$NONINTERACTIVE" =~ ^(1|true|TRUE|yes|YES)$ ]]; then
+    START_NOW_INPUT="${START_NOW_DEFAULT:-n}"
+else
+    echo -e "${YELLOW}Botu indi başlatmaq istəyirsiniz? [Y/n]${RESET}"
+    read -r START_NOW_INPUT
+fi
+if [[ ! "$START_NOW_INPUT" =~ ^[Nn]$ ]]; then
     /usr/local/bin/music-start
 fi

@@ -25,6 +25,27 @@ Bu skript avtomatik olaraq:
 - `music-start` və `music-stop` qlobal əmrlərini qeyd edir
 - İstəsəniz botu dərhal başladır
 
+Prompt-suz quraşdırma üçün əvvəlcədən export edə bilərsiniz:
+
+```bash
+export BOT_TOKEN='123456:ABC-DEF1234...'
+export CHANNEL_ID='@mychannel'
+export SAVE_LOCAL='true'
+export DOWNLOADS_DIR="$HOME/Music/legal-music"
+export INSTALL_NONINTERACTIVE=1
+export START_NOW='n'
+
+bash install.sh
+```
+
+Parametrlər:
+- `BOT_TOKEN`: `@BotFather`-dən aldığınız Telegram bot tokeni
+- `CHANNEL_ID`: `-1001234567890` və ya `@mychannel` formatında chat/channel ID
+- `SAVE_LOCAL`: `true` olduqda fayllar lokalda qalır, `false` olduqda göndərildikdən sonra silinir
+- `DOWNLOADS_DIR`: faylların saxlanacağı custom qovluq
+- `INSTALL_NONINTERACTIVE=1`: prompt çıxarmadan quraşdırır, əksik dəyər varsa səhvlə dayanır
+- `START_NOW=n`: non-interactive quraşdırmada botu dərhal başlatmır
+
 Quraşdırmadan sonra:
 
 ```bash

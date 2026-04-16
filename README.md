@@ -69,6 +69,26 @@ The installer will:
 4. Register global commands `music-start` / `music-stop`
 5. Optionally start the bot immediately
 
+For non-interactive setup, you can export everything before running the installer:
+```bash
+export BOT_TOKEN='123456:ABC-DEF1234...'
+export CHANNEL_ID='@mychannel'
+export SAVE_LOCAL='true'
+export DOWNLOADS_DIR="$HOME/Music/legal-music"
+export INSTALL_NONINTERACTIVE=1
+export START_NOW='n'
+
+bash install.sh
+```
+
+Variables:
+- `BOT_TOKEN`: Telegram bot token from `@BotFather`
+- `CHANNEL_ID`: Telegram channel/chat target such as `-1001234567890` or `@mychannel`
+- `SAVE_LOCAL`: `true` keeps downloaded files, `false` deletes them after sending
+- `DOWNLOADS_DIR`: optional custom folder for saved audio files
+- `INSTALL_NONINTERACTIVE=1`: fail fast instead of prompting
+- `START_NOW=n`: skip immediate bot start during non-interactive install
+
 After install, from any terminal:
 ```bash
 music-start   # start the bot

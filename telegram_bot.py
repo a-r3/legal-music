@@ -279,7 +279,7 @@ async def _ytdlp_download(target: str, dest_dir: Path) -> Path:
     import subprocess
     import time
 
-    before = time.time()
+    before = time.time() - 1  # 1s buffer: fayl sistemi mtime-ı yuvarlaqlaşdıra bilər
 
     def _run() -> None:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)

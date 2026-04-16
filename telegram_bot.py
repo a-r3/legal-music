@@ -252,50 +252,58 @@ async def _send_audio(
 async def _ytdlp_download(target: str, dest_dir: Path) -> Path:
     """URL və ya axtarış sorğusu ilə MP3 yüklə.
 
-    target URL-dirsə birbaşa yüklər; deyilsə 'ytsearch1:' ilə axtarır.
-    Fayl adı həmişə YouTube başlığından (%(title)s) götürülür.
+    Unikal temp qovluğa yükləyir → yalnız o qovluqdakı mp3-ü tapır →
+    dest_dir-ə köçürür. Fayl adı yt-dlp-in %(title)s-indən gəlir.
     """
+    import subprocess
+    import shutil as _shutil
+
     if not shutil.which("yt-dlp"):
         raise RuntimeError("yt-dlp quraşdırılmayıb")
 
     dest_dir.mkdir(parents=True, exist_ok=True)
-    output_template = str(dest_dir / "%(title)s.%(ext)s")
+
+    # Hər yükləmə üçün ayrı temp qovluq — başqa fayllarla qarışıq olmur
+    tmp_dir = dest_dir / f"_tmp_{os.getpid()}_{id(target) & 0xFFFF:04x}"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
 
     source = target if target.startswith("http") else f"ytsearch1:{target}"
     cmd = [
         "yt-dlp", source,
         "-x", "--audio-format", "mp3",
         "--audio-quality", "0",
-        "-o", output_template,
+        "-o", str(tmp_dir / "%(title)s.%(ext)s"),
         "--no-warnings", "--quiet",
         "--no-playlist",
         "--extractor-args", "youtube:player_client=android,web",
     ]
-    # Browser cookies varsa bot aşkarlamamasını keçmək üçün istifadə et
     browser = os.getenv("YTDLP_BROWSER", "").strip()
     if browser:
         cmd += ["--cookies-from-browser", browser]
-
-    import subprocess
-    import time
-
-    before = time.time() - 1  # 1s buffer: fayl sistemi mtime-ı yuvarlaqlaşdıra bilər
 
     def _run() -> None:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
         if result.returncode != 0:
             raise RuntimeError(result.stderr[:300] or "yt-dlp xətası")
 
-    await asyncio.get_event_loop().run_in_executor(None, _run)
+    try:
+        await asyncio.get_event_loop().run_in_executor(None, _run)
 
-    # Yalnız yükləmədən SONRA yaradılmış faylları götür
-    new_files = sorted(
-        (p for p in dest_dir.glob("*.mp3") if p.stat().st_mtime >= before),
-        key=lambda p: p.stat().st_mtime,
-    )
-    if not new_files:
-        raise RuntimeError("yt-dlp: fayl tapılmadı (yeni fayl yaradılmadı)")
-    return new_files[-1]
+        mp3_files = list(tmp_dir.glob("*.mp3"))
+        if not mp3_files:
+            raise RuntimeError("yt-dlp: fayl yaradılmadı")
+
+        src = mp3_files[0]
+        dst = dest_dir / src.name
+        # Eyni adlı fayl varsa, üzərinə yaz (yenilənmiş versiya)
+        _shutil.move(str(src), str(dst))
+        return dst
+    finally:
+        # Temp qovluğu təmizlə
+        try:
+            _shutil.rmtree(tmp_dir, ignore_errors=True)
+        except Exception:
+            pass
 
 
 # köhnə adı saxla — geriyə uyğunluq üçün

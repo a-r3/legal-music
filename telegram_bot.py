@@ -269,7 +269,12 @@ async def _ytdlp_download(target: str, dest_dir: Path) -> Path:
         "-o", output_template,
         "--no-warnings", "--quiet",
         "--no-playlist",
+        "--extractor-args", "youtube:player_client=android,web",
     ]
+    # Browser cookies varsa bot aşkarlamamasını keçmək üçün istifadə et
+    browser = os.getenv("YTDLP_BROWSER", "").strip()
+    if browser:
+        cmd += ["--cookies-from-browser", browser]
 
     import subprocess
 

@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo.svg" alt="Legal Music logo" width="640">
+</p>
+
 # legal-music — Azərbaycan Dili Bələdçisi
 
 **legal-music** — yalnız qanuni, açıq mənbəli saytlardan (Creative Commons, Internet Archive, Bandcamp) pulsuz musiqi yükləmək üçün Python CLI aləti və Telegram botu.

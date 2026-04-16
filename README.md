@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo.svg" alt="Legal Music logo" width="640">
+</p>
+
 # legal-music
 
 **legal-music** is a professional Python CLI for finding and downloading music **from legal, permitted, and openly downloadable sources only**.

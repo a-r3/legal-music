@@ -1,0 +1,29 @@
+<svg width="1200" height="320" viewBox="0 0 1200 320" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="logoTitle logoDesc">
+  <title id="logoTitle">Legal Music logo</title>
+  <desc id="logoDesc">A dark music note with a green checkmark followed by the Legal Music wordmark.</desc>
+  <defs>
+    <filter id="glowGreen" x="-40%" y="-60%" width="180%" height="220%">
+      <feGaussianBlur stdDeviation="24" result="blur"/>
+      <feColorMatrix
+        in="blur"
+        type="matrix"
+        values="0 0 0 0 0.498 0 0 0 0 0.922 0 0 0 0 0.298 0 0 0 0.55 0"
+        result="glow"/>
+      <feBlend in="SourceGraphic" in2="glow" mode="screen"/>
+    </filter>
+    <linearGradient id="musicFill" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#8AEB4D"/>
+      <stop offset="100%" stop-color="#52C73A"/>
+    </linearGradient>
+  </defs>
+
+  <g transform="translate(56 40)">
+    <path d="M221 26L96 58V188.5C86.4 181.6 72.2 177 56.5 177C27.5 177 4 193 4 212.5C4 232 27.5 248 56.5 248C85.5 248 109 232 109 212.5V86.5L191 65V201.5C181.6 194.7 167.7 190.5 152.5 190.5C123.5 190.5 100 206.5 100 226C100 245.5 123.5 261.5 152.5 261.5C181.5 261.5 205 245.5 205 226V40.5L221 36V26Z" fill="#2A2F37"/>
+    <path d="M65 142.5L110 185.5L196 96" stroke="url(#musicFill)" stroke-width="22" stroke-linecap="round" stroke-linejoin="round" filter="url(#glowGreen)"/>
+  </g>
+
+  <g transform="translate(340 84)" font-family="Inter, Segoe UI, Arial, sans-serif" font-weight="700" font-size="118">
+    <text x="0" y="122" fill="#2A2F37">Legal</text>
+    <text x="312" y="122" fill="url(#musicFill)" filter="url(#glowGreen)">Music</text>
+  </g>
+</svg>

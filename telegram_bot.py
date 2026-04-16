@@ -277,6 +277,9 @@ async def _ytdlp_download(target: str, dest_dir: Path) -> Path:
         cmd += ["--cookies-from-browser", browser]
 
     import subprocess
+    import time
+
+    before = time.time()
 
     def _run() -> None:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
@@ -285,10 +288,14 @@ async def _ytdlp_download(target: str, dest_dir: Path) -> Path:
 
     await asyncio.get_event_loop().run_in_executor(None, _run)
 
-    mp3_files = sorted(dest_dir.glob("*.mp3"), key=lambda p: p.stat().st_mtime)
-    if not mp3_files:
-        raise RuntimeError("yt-dlp: fayl tapılmadı")
-    return mp3_files[-1]
+    # Yalnız yükləmədən SONRA yaradılmış faylları götür
+    new_files = sorted(
+        (p for p in dest_dir.glob("*.mp3") if p.stat().st_mtime >= before),
+        key=lambda p: p.stat().st_mtime,
+    )
+    if not new_files:
+        raise RuntimeError("yt-dlp: fayl tapılmadı (yeni fayl yaradılmadı)")
+    return new_files[-1]
 
 
 # köhnə adı saxla — geriyə uyğunluq üçün

@@ -50,12 +50,14 @@ try {
     err "pip not found. Reinstall Python and make sure to select 'Add pip'."
 }
 
+# SSL-intercepting networks (corporate/antivirus proxies)
+$PIP_SSL = @("--trusted-host", "pypi.org", "--trusted-host", "files.pythonhosted.org")
+
 # ── 3. yt-dlp ─────────────────────────────────────────────────────────────
 step "Checking yt-dlp..."
-$PIP_SSL = @("--trusted-host", "pypi.org", "--trusted-host", "files.pythonhosted.org")
 $ytdlp = Get-Command "yt-dlp" -ErrorAction SilentlyContinue
 if (-not $ytdlp) {
-    warn "yt-dlp not found, installing via pip..."
+    warn "yt-dlp not found, installing..."
     & $PYTHON -m pip install -q @PIP_SSL yt-dlp
 }
 $ytver = & $PYTHON -m yt_dlp --version 2>&1
@@ -63,8 +65,12 @@ ok "yt-dlp $ytver"
 
 # ── 4. ffmpeg ─────────────────────────────────────────────────────────────
 step "Checking ffmpeg..."
+$FFMPEG_BIN = $null
 $ff = Get-Command "ffmpeg" -ErrorAction SilentlyContinue
-if (-not $ff) {
+if ($ff) {
+    $FFMPEG_BIN = Split-Path $ff.Source
+    ok "ffmpeg available ($FFMPEG_BIN)"
+} else {
     warn "ffmpeg not found, installing automatically..."
     $winget = Get-Command "winget" -ErrorAction SilentlyContinue
     $ffmpegOk = $false
@@ -72,6 +78,7 @@ if (-not $ff) {
         try {
             winget install Gyan.FFmpeg --silent --accept-package-agreements --accept-source-agreements | Out-Null
             $ffmpegOk = $true
+            $FFMPEG_BIN = "$env:ProgramFiles\ffmpeg\bin"
             ok "ffmpeg installed (winget)"
         } catch {}
     }
@@ -89,20 +96,18 @@ if (-not $ff) {
             if (Test-Path $ffDest) { Remove-Item $ffDest -Recurse -Force }
             Move-Item $inner.FullName $ffDest
             Remove-Item $ffZip -Force
-            $binPath = "$ffDest\bin"
+            $FFMPEG_BIN = "$ffDest\bin"
             $cur = [Environment]::GetEnvironmentVariable("Path", "Machine")
-            if ($cur -notlike "*$binPath*") {
-                [Environment]::SetEnvironmentVariable("Path", "$cur;$binPath", "Machine")
+            if ($cur -notlike "*$FFMPEG_BIN*") {
+                [Environment]::SetEnvironmentVariable("Path", "$cur;$FFMPEG_BIN", "Machine")
             }
-            $env:Path += ";$binPath"
-            ok "ffmpeg installed (manual: $ffDest)"
+            $env:Path += ";$FFMPEG_BIN"
+            ok "ffmpeg installed ($FFMPEG_BIN)"
             $ffmpegOk = $true
         } catch {
             err "ffmpeg installation failed: $_"
         }
     }
-} else {
-    ok "ffmpeg available"
 }
 
 # ── 5. Python packages ────────────────────────────────────────────────────
@@ -146,9 +151,17 @@ if (-not (Test-Path $ENV_FILE)) {
     $CHANNEL_ID = Read-Host
     if (-not $CHANNEL_ID) { err "Channel ID cannot be empty" }
 
-    $envContent = "BOT_TOKEN=$BOT_TOKEN`nCHANNEL_ID=$CHANNEL_ID`nSAVE_LOCAL=true`n"
+    $ffmpegLine = if ($FFMPEG_BIN) { "`nFFMPEG_LOCATION=$FFMPEG_BIN" } else { "" }
+    $envContent = "BOT_TOKEN=$BOT_TOKEN`nCHANNEL_ID=$CHANNEL_ID`nSAVE_LOCAL=true$ffmpegLine`n"
     [System.IO.File]::WriteAllText($ENV_FILE, $envContent)
     ok ".env created"
+} elseif ($FFMPEG_BIN) {
+    # Update FFMPEG_LOCATION in existing .env if missing
+    $existing = [System.IO.File]::ReadAllText($ENV_FILE)
+    if ($existing -notmatch "FFMPEG_LOCATION") {
+        [System.IO.File]::WriteAllText($ENV_FILE, $existing.TrimEnd() + "`nFFMPEG_LOCATION=$FFMPEG_BIN`n")
+        ok ".env updated with FFMPEG_LOCATION"
+    }
 }
 
 # ── 8. music-start.bat / music-stop.bat ──────────────────────────────────
@@ -156,48 +169,42 @@ step "Creating start/stop scripts..."
 
 $startScript = @"
 @echo off
-tasklist /FI "IMAGENAME eq python.exe" /FI "WINDOWTITLE eq telegram_bot*" 2>nul | find /I "python.exe" >nul
+tasklist /FI "WINDOWTITLE eq legal-music-bot" 2>nul | find /I "cmd.exe" >nul
 if not errorlevel 1 (
     echo Bot is already running
-    pause
+    timeout /t 2 >nul
     exit /b 0
 )
 cd /d "$REPO_DIR"
-echo Starting legal-music bot...
-$PYTHON telegram_bot.py
-if errorlevel 1 (
-    echo.
-    echo Bot crashed. See error above.
-    pause
-)
+start "legal-music-bot" /min $PYTHON telegram_bot.py
+echo Bot started
+timeout /t 2 >nul
 "@
 
 $stopScript = @"
 @echo off
 taskkill /FI "WINDOWTITLE eq legal-music-bot" /F >nul 2>&1
-taskkill /FI "IMAGENAME eq python.exe" /FI "COMMANDLINE eq *telegram_bot*" /F >nul 2>&1
 echo Bot stopped
-pause
+timeout /t 2 >nul
 "@
 
-$startScript | Set-Content "$REPO_DIR\music-start.bat" -Encoding UTF8
-$stopScript  | Set-Content "$REPO_DIR\music-stop.bat"  -Encoding UTF8
+[System.IO.File]::WriteAllText("$REPO_DIR\music-start.bat", $startScript)
+[System.IO.File]::WriteAllText("$REPO_DIR\music-stop.bat",  $stopScript)
 ok "music-start.bat and music-stop.bat created"
 
 # ── 9. Desktop shortcut ───────────────────────────────────────────────────
 $desktop = [System.Environment]::GetFolderPath("Desktop")
 $wsh = New-Object -ComObject WScript.Shell
-
 $sc = $wsh.CreateShortcut("$desktop\Music Bot Start.lnk")
-$sc.TargetPath  = "$REPO_DIR\music-start.bat"
+$sc.TargetPath       = "$REPO_DIR\music-start.bat"
 $sc.WorkingDirectory = $REPO_DIR
-$sc.Description = "Start legal-music bot"
+$sc.Description      = "Start legal-music bot"
 $sc.Save()
 ok "Desktop shortcut 'Music Bot Start' created"
 
-# ── 10. Test ──────────────────────────────────────────────────────────────
+# ── 10. Verify ────────────────────────────────────────────────────────────
 step "Verifying installation..."
-$test = & $PYTHON -c "import telegram, mutagen, yt_dlp; print('OK')" 2>&1
+$test = & $PYTHON -c "import telegram, mutagen, yt_dlp, dotenv; print('OK')" 2>&1
 if ($test -match "OK") {
     ok "All modules working"
 } else {

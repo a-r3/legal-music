@@ -146,7 +146,8 @@ if (-not (Test-Path $ENV_FILE)) {
     $CHANNEL_ID = Read-Host
     if (-not $CHANNEL_ID) { err "Channel ID cannot be empty" }
 
-    "BOT_TOKEN=$BOT_TOKEN`nCHANNEL_ID=$CHANNEL_ID`nSAVE_LOCAL=true" | Set-Content $ENV_FILE -Encoding UTF8
+    $envContent = "BOT_TOKEN=$BOT_TOKEN`nCHANNEL_ID=$CHANNEL_ID`nSAVE_LOCAL=true`n"
+    [System.IO.File]::WriteAllText($ENV_FILE, $envContent)
     ok ".env created"
 }
 

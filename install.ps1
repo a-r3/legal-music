@@ -58,7 +58,7 @@ if (-not $ytdlp) {
     warn "yt-dlp yoxdur, pip ile qurulur..."
     & $PYTHON -m pip install -q @PIP_SSL yt-dlp
 }
-$ytver = & yt-dlp --version 2>&1
+$ytver = & $PYTHON -m yt_dlp --version 2>&1
 ok "yt-dlp $ytver"
 
 # ── 4. ffmpeg ─────────────────────────────────────────────────────────────

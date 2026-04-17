@@ -108,6 +108,7 @@ if (-not $ff) {
 # ── 5. Python packages ────────────────────────────────────────────────────
 step "Installing Python packages..."
 & $PYTHON -m pip install -q @PIP_SSL --upgrade pip
+& $PYTHON -m pip install -q @PIP_SSL python-dotenv
 & $PYTHON -m pip install -q @PIP_SSL -r "$REPO_DIR\requirements.txt"
 & $PYTHON -m pip install -q @PIP_SSL -e "$REPO_DIR"
 ok "All packages installed"
@@ -161,8 +162,13 @@ if not errorlevel 1 (
     exit /b 0
 )
 cd /d "$REPO_DIR"
-start "legal-music-bot" /min $PYTHON telegram_bot.py
-echo Bot started
+echo Starting legal-music bot...
+$PYTHON telegram_bot.py
+if errorlevel 1 (
+    echo.
+    echo Bot crashed. See error above.
+    pause
+)
 "@
 
 $stopScript = @"

@@ -24,7 +24,7 @@ from typing import Optional
 
 try:
     from dotenv import load_dotenv
-    load_dotenv()
+    load_dotenv(Path(__file__).parent / ".env")
 except ImportError:
     pass
 
@@ -61,7 +61,7 @@ try:
         filters,
     )
 except ImportError:
-    logger.error("python-telegram-bot quraşdırılmayıb: pip install python-telegram-bot")
+    logger.error("python-telegram-bot not installed: pip install python-telegram-bot")
     sys.exit(1)
 
 # ---------------------------------------------------------------------------
@@ -86,7 +86,7 @@ except ImportError:
         from src.legal_music.playlist import read_playlist
         from src.legal_music.utils import default_data_dir, default_output_dir
     except ImportError:
-        logger.error("legal-music paketi tapılmadı: pip install -e .")
+        logger.error("legal-music package not found: pip install -e .")
         sys.exit(1)
 
 # ---------------------------------------------------------------------------
@@ -103,11 +103,11 @@ DB_PATH         = default_data_dir() / "cache" / "bot_cache.db"
 SAVE_LOCAL: bool = os.getenv("SAVE_LOCAL", "true").strip().lower() != "false"
 
 if not BOT_TOKEN:
-    logger.error("BOT_TOKEN tapılmadı. .env faylını yoxlayın.")
+    logger.error("BOT_TOKEN not found. Check your .env file.")
     sys.exit(1)
 
-logger.info("Yüklənmiş fayllar: %s | Yerli saxlama: %s",
-            DOWNLOADS_DIR, "aktiv" if SAVE_LOCAL else "deaktiv")
+logger.info("Downloads dir: %s | Save local: %s",
+            DOWNLOADS_DIR, "enabled" if SAVE_LOCAL else "disabled")
 
 _URL_RE      = re.compile(r"https?://[^\s]+|www\.[^\s]+|youtu\.be/[^\s]+", re.IGNORECASE)
 _SEP_RE      = re.compile(r"\s*[/|,–—]\s*|\s+by\s+|\s*:\s*", re.IGNORECASE)
@@ -185,7 +185,7 @@ async def _safe_reply(update: Update, text: str) -> Optional[Message]:
         if update.message:
             return await update.message.reply_text(text, parse_mode=None)
     except Exception as exc:
-        logger.warning("reply göndərilmədi: %s", exc)
+        logger.warning("reply failed: %s", exc)
     return None
 
 
@@ -227,7 +227,7 @@ async def _send_audio(
                     read_timeout=60, write_timeout=60,
                 )
         except TelegramError as e:
-            logger.warning("send_audio xətası (%s): %s", chat_id, e)
+            logger.warning("send_audio error (%s): %s", chat_id, e)
 
     if CHANNEL_ID:
         await _one(CHANNEL_ID)
@@ -236,13 +236,12 @@ async def _send_audio(
         if str(cid) != str(CHANNEL_ID):
             await _one(cid)
 
-    # SAVE_LOCAL=false olduqda göndərildikdən sonra faylı sil
     if not SAVE_LOCAL:
         try:
             file_path.unlink(missing_ok=True)
-            logger.debug("Fayl silindi (SAVE_LOCAL=false): %s", file_path.name)
+            logger.debug("File deleted (SAVE_LOCAL=false): %s", file_path.name)
         except Exception as exc:
-            logger.warning("Fayl silinmədi: %s", exc)
+            logger.warning("File deletion failed: %s", exc)
 
 
 # ---------------------------------------------------------------------------
@@ -357,7 +356,7 @@ async def _search_and_download(
                                reply_update, title=t, performer=p)
             return True
         except Exception as exc:
-            logger.warning("Qanuni mənbə yükləmə xətası (%s): %s", song, exc)
+            logger.warning("Legal source download error (%s): %s", song, exc)
 
     # ── Mərhələ 3: yt-dlp YouTube fallback ────────────────────────────────
     await _safe_edit(status_msg, f"🔄 YouTube-da axtarılır…\n🎵 {song}")
@@ -371,7 +370,7 @@ async def _search_and_download(
                           reply_update, title=saved.stem[:64], performer=p)
         return True
     except Exception as exc:
-        logger.warning("yt-dlp axtarış xətası (%s): %s", song, exc)
+        logger.warning("yt-dlp search error (%s): %s", song, exc)
         return False
 
 
@@ -648,9 +647,9 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     exc = context.error
     if isinstance(exc, NetworkError):
-        logger.warning("Şəbəkə xətası (avtomatik yenidən qoşulur): %s", exc)
+        logger.warning("Network error (auto-reconnecting): %s", exc)
     else:
-        logger.error("Xəta: %s", exc, exc_info=exc)
+        logger.error("Error: %s", exc, exc_info=exc)
         if exc:
             _log_error("unhandled", exc)
 
@@ -660,7 +659,7 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    logger.info("Legal Music Bot başladılır…")
+    logger.info("Legal Music Bot starting...")
 
     app = Application.builder().token(BOT_TOKEN).build()
 
@@ -673,7 +672,7 @@ def main() -> None:
 
     app.add_error_handler(error_handler)
 
-    logger.info("Bot işləyir. Ctrl+C ilə dayandırın.")
+    logger.info("Bot running. Press Ctrl+C to stop.")
     app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=False)
 
 

@@ -257,8 +257,10 @@ async def _ytdlp_download(target: str, dest_dir: Path) -> Path:
     import subprocess
     import shutil as _shutil
 
-    if not shutil.which("yt-dlp"):
-        raise RuntimeError("yt-dlp quraşdırılmayıb")
+    try:
+        import yt_dlp  # noqa: F401
+    except ImportError:
+        raise RuntimeError("yt-dlp not installed: pip install yt-dlp")
 
     dest_dir.mkdir(parents=True, exist_ok=True)
 
@@ -275,8 +277,9 @@ async def _ytdlp_download(target: str, dest_dir: Path) -> Path:
                 ffmpeg_loc = candidate
                 break
 
-    cmd = [
-        "yt-dlp", source,
+    ytdlp_cmd = shutil.which("yt-dlp") or [sys.executable, "-m", "yt_dlp"]
+    cmd = [ytdlp_cmd] if isinstance(ytdlp_cmd, str) else ytdlp_cmd
+    cmd += [source,
         "-x", "--audio-format", "mp3",
         "--audio-quality", "0",
         "-o", str(tmp_dir / "%(title)s.%(ext)s"),
@@ -505,7 +508,10 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
         stats  = _get_db().stats()
-        ytdlp  = "✅" if shutil.which("yt-dlp") else "❌"
+        try:
+            import yt_dlp as _yt; ytdlp = "✅"
+        except ImportError:
+            ytdlp = "❌"
         sources = ", ".join(_get_cfg().enabled_source_names())
         await _safe_reply(update,
             f"📊 Bot Statusu\n\n"
@@ -563,8 +569,10 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
     url = match.group(0)
 
-    if not shutil.which("yt-dlp"):
-        await _safe_reply(update, "❌ yt-dlp quraşdırılmayıb: pip install yt-dlp")
+    try:
+        import yt_dlp  # noqa: F401
+    except ImportError:
+        await _safe_reply(update, "❌ yt-dlp not installed: pip install yt-dlp")
         return
 
     status_msg = await _safe_reply(update, "⬇️ URL yüklənir…")

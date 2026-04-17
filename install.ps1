@@ -52,10 +52,11 @@ try {
 
 # ── 3. yt-dlp ─────────────────────────────────────────────────────────────
 step "yt-dlp yoxlanilir..."
+$PIP_SSL = @("--trusted-host", "pypi.org", "--trusted-host", "files.pythonhosted.org")
 $ytdlp = Get-Command "yt-dlp" -ErrorAction SilentlyContinue
 if (-not $ytdlp) {
     warn "yt-dlp yoxdur, pip ile qurulur..."
-    & $PYTHON -m pip install -q yt-dlp
+    & $PYTHON -m pip install -q @PIP_SSL yt-dlp
 }
 $ytver = & yt-dlp --version 2>&1
 ok "yt-dlp $ytver"
@@ -91,9 +92,9 @@ if (-not $ff) {
 
 # ── 5. Python paketleri ───────────────────────────────────────────────────
 step "Python paketleri qurulur..."
-& $PYTHON -m pip install -q --upgrade pip
-& $PYTHON -m pip install -q -r "$REPO_DIR\requirements.txt"
-& $PYTHON -m pip install -q -e "$REPO_DIR"
+& $PYTHON -m pip install -q @PIP_SSL --upgrade pip
+& $PYTHON -m pip install -q @PIP_SSL -r "$REPO_DIR\requirements.txt"
+& $PYTHON -m pip install -q @PIP_SSL -e "$REPO_DIR"
 ok "Butun paketler quruldu"
 
 # ── 6. Qovluqlar ──────────────────────────────────────────────────────────

@@ -65,26 +65,41 @@ ok "yt-dlp $ytver"
 step "ffmpeg yoxlanilir..."
 $ff = Get-Command "ffmpeg" -ErrorAction SilentlyContinue
 if (-not $ff) {
-    warn "ffmpeg tapilmadi."
-    # winget ile cehd et
+    warn "ffmpeg tapilmadi, avtomatik qurulur..."
     $winget = Get-Command "winget" -ErrorAction SilentlyContinue
+    $ffmpegOk = $false
     if ($winget) {
-        warn "winget ile ffmpeg qurulur..."
         try {
-            winget install Gyan.FFmpeg --silent --accept-package-agreements --accept-source-agreements
+            winget install Gyan.FFmpeg --silent --accept-package-agreements --accept-source-agreements | Out-Null
+            $ffmpegOk = $true
             ok "ffmpeg quruldu (winget)"
+        } catch {}
+    }
+    if (-not $ffmpegOk) {
+        warn "winget yoxdur/islemedi, manual yukleme baslanir..."
+        $ffUrl  = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
+        $ffZip  = "$env:TEMP\ffmpeg.zip"
+        $ffDest = "C:\ffmpeg"
+        try {
+            Write-Host "    ffmpeg yuklenir (~ 100 MB)..." -ForegroundColor Yellow
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            Invoke-WebRequest -Uri $ffUrl -OutFile $ffZip -UseBasicParsing
+            Expand-Archive -Path $ffZip -DestinationPath "$env:TEMP\ffmpeg_extract" -Force
+            $inner = Get-ChildItem "$env:TEMP\ffmpeg_extract" -Directory | Select-Object -First 1
+            if (Test-Path $ffDest) { Remove-Item $ffDest -Recurse -Force }
+            Move-Item $inner.FullName $ffDest
+            Remove-Item $ffZip -Force
+            $binPath = "$ffDest\bin"
+            $cur = [Environment]::GetEnvironmentVariable("Path", "Machine")
+            if ($cur -notlike "*$binPath*") {
+                [Environment]::SetEnvironmentVariable("Path", "$cur;$binPath", "Machine")
+            }
+            $env:Path += ";$binPath"
+            ok "ffmpeg quruldu (manual: $ffDest)"
+            $ffmpegOk = $true
         } catch {
-            warn "winget ile qurmaq olmadi."
-            warn "Manual qurmaq ucun: https://www.gyan.dev/ffmpeg/builds/"
-            warn "ffmpeg/bin/ qovlugunu PATH-e elave edin, sonra bu skripti yeniden icra edin."
-            Read-Host "ffmpeg-i qurduqdan sonra Enter duymesine basin"
+            err "ffmpeg qurulmadi: $_"
         }
-    } else {
-        warn "winget tapilmadi. ffmpeg-i manual qurun:"
-        warn "  1. https://www.gyan.dev/ffmpeg/builds/ -> ffmpeg-release-essentials.zip yukle"
-        warn "  2. C:\ffmpeg\ qovluguna cixar"
-        warn "  3. Sistem PATH-ine C:\ffmpeg\bin elave et"
-        Read-Host "ffmpeg-i qurduqdan sonra Enter duymesine basin"
     }
 } else {
     ok "ffmpeg mövcuddur"

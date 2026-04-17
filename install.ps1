@@ -195,10 +195,11 @@ ok "music-start.bat and music-stop.bat created"
 # ── 9. Desktop shortcut ───────────────────────────────────────────────────
 $desktop = [System.Environment]::GetFolderPath("Desktop")
 $wsh = New-Object -ComObject WScript.Shell
-$sc = $wsh.CreateShortcut("$desktop\Music Bot Start.lnk")
+$sc = $wsh.CreateShortcut("$desktop\Legal Music.lnk")
 $sc.TargetPath       = "$REPO_DIR\music-start.bat"
 $sc.WorkingDirectory = $REPO_DIR
-$sc.Description      = "Start legal-music bot"
+$sc.Description      = "Start Legal Music bot"
+$sc.IconLocation     = "$REPO_DIR\assets\logo.ico"
 $sc.Save()
 ok "Desktop shortcut 'Music Bot Start' created"
 

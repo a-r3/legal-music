@@ -267,6 +267,14 @@ async def _ytdlp_download(target: str, dest_dir: Path) -> Path:
     tmp_dir.mkdir(parents=True, exist_ok=True)
 
     source = target if target.startswith("http") else f"ytsearch1:{target}"
+
+    ffmpeg_loc = os.getenv("FFMPEG_LOCATION", "").strip()
+    if not ffmpeg_loc:
+        for candidate in [r"C:\ffmpeg\bin", r"C:\ffmpeg"]:
+            if Path(candidate).exists():
+                ffmpeg_loc = candidate
+                break
+
     cmd = [
         "yt-dlp", source,
         "-x", "--audio-format", "mp3",
@@ -276,6 +284,8 @@ async def _ytdlp_download(target: str, dest_dir: Path) -> Path:
         "--no-playlist",
         "--extractor-args", "youtube:player_client=android,web",
     ]
+    if ffmpeg_loc:
+        cmd += ["--ffmpeg-location", ffmpeg_loc]
     browser = os.getenv("YTDLP_BROWSER", "").strip()
     if browser:
         cmd += ["--cookies-from-browser", browser]

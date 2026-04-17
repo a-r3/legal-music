@@ -282,6 +282,7 @@ async def _ytdlp_download(target: str, dest_dir: Path) -> Path:
         "-o", str(tmp_dir / "%(title)s.%(ext)s"),
         "--no-warnings", "--quiet",
         "--no-playlist",
+        "--match-filter", "duration <= 600",
         "--extractor-args", "youtube:player_client=android,web",
     ]
     if ffmpeg_loc:
